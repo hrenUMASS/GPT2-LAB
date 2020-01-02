@@ -7,10 +7,11 @@ import transformers as tfm
 from torch import nn
 from torch.utils.data import DataLoader
 
-from codes.main import log_info
+from loggers import log_info, cuda_mem_in_mb
 
 
 def get_tensor_batch(batch):
+    # print(batch)
     # print('batch1:{}'.format(batch), [x.shape for x in batch])
     max_len = max(batch, key=lambda x: x.shape[-1]).shape[-1]
     attn_mask = torch.ones(len(batch), max_len, dtype=torch.float16)
@@ -27,7 +28,7 @@ def get_tensor_batch(batch):
 
 
 def train(model, dataset, batch_size, epochs, epoch_iter, learning_rate=1e-2, weight_decay=1e-4,
-          loggers=(None, None, None), n_gpus=1, device=torch.device('cuda:0')):
+          loggers=(None, None, None), n_gpus=1, device=None):
     no_decay = ['bias', 'LayerNorm.weight']
     device_ids = list(range(n_gpus))
     # SGD

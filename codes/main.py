@@ -7,42 +7,23 @@ import GPUtil
 import torch
 import transformers as tfm
 
-from codes.dataset import BlockTextDataset
-from codes.gpt2_eval import evaluate
-from codes.gpt2_train import train
+from dataset import TextDataset
+from gpt2_eval import evaluate
+from gpt2_train import train
+from loggers import get_logger, log_info, cuda_mem_in_mb
 
 logging.getLogger('transformers.tokenization_utils').disabled = True
 
 device = torch.device('cuda:0')
 
 
-def log_info(logger, msg):
-    print(msg)
-    if logger is not None:
-        logger.info(msg)
-
-
-def cuda_mem_in_mb():
-    return torch.cuda.memory_allocated() / 2 ** 20
-
-
-def main(config_file='model_config.json'):
-    os.chdir('/'.join(os.path.abspath(__file__).split('/')[:-1]))
-    with open(config_file, 'r') as f:
-        config = json.load(f) if os.path.exists(config_file) and os.path.isfile(config_file) else {}
+def single_train(config):
     # project_path = '/iesl/canvas/hren/gpt2_wiki_lab/v1'
     data_path = config.get('data_path',
                            '/iesl/canvas/hschang/language_modeling/NSD_for_sentence_embedding/data/raw/wiki2016_both.txt')
     load_path = config.get('load_path', 'gpt2-medium')
     save_path = config.get('save_path', None)
-
-    def get_logger(name, log_file, level=logging.INFO):
-        handler = logging.FileHandler(log_file)
-        handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'))
-        logger = logging.getLogger(name)
-        logger.setLevel(level)
-        logger.addHandler(handler)
-        return logger
+    save_model = config.get('save_model', False)
 
     prepare_logger, train_logger, validation_logger = None, None, None
     final_logger, cuda_logger, loss_logger = None, None, None
@@ -80,8 +61,8 @@ def main(config_file='model_config.json'):
     max_len = config.get('max_len', 512)
     truncate_mode = config.get('truncate_mode', 'truncate')
 
-    data = BlockTextDataset(data_path, tokenizer, epochs * epoch_iter * batch_size, max_len=max_len,
-                            truncate_mode=truncate_mode)
+    data = TextDataset(data_path, tokenizer, epochs * epoch_iter * batch_size, max_len=max_len,
+                       valid_func=lambda x: x.shape[0] > 2, truncate_mode=truncate_mode)
     log_info(cuda_logger, 'avaliable cudas {}'.format(torch.cuda.device_count()))
     log_info(prepare_logger, 'start training:\n\tepochs: {}\n\tepoch_iter: {}\n\tbatch_size: {}'.format(
         epochs, epoch_iter, batch_size))
@@ -96,7 +77,7 @@ def main(config_file='model_config.json'):
     perplexity, perplexities, eval_losses = evaluate(new_model, data, batch_size, epochs, epoch_iter,
                                                      logger=validation_logger, n_gpus=n_gpus)
 
-    if save_path is not None:
+    if save_path is not None and save_model:
         log_info(final_logger, 'saving trained models: ' + save_path)
         tfm.GPT2LMHeadModel.save_pretrained(new_model, save_path)
         tfm.GPT2Tokenizer.save_pretrained(tokenizer, save_path)
@@ -106,6 +87,32 @@ def main(config_file='model_config.json'):
         torch.save(eval_losses, log_path + 'eval_losses.pt')
         torch.save(torch.tensor(perplexity), log_path + 'perplexity.pt')
         torch.save(perplexities, log_path + 'perplexities.pt')
+
+
+def main(config_file='model_config.json'):
+    os.chdir('/'.join(os.path.abspath(__file__).split('/')[:-1]))
+    with open(config_file, 'r') as f:
+        config = json.load(f) if os.path.exists(config_file) and os.path.isfile(config_file) else {}
+    config_fields = ['data_path', 'load_path', 'save_path', 'epochs', 'epoch_iter', 'batch_size', 'learning_rate',
+                     'weight_decay', 'n_gpus', 'max_len', 'truncate_mode']
+    models = None
+    for field in config_fields:
+        value = config.get(field, None)
+        if value is not None and isinstance(value, list):
+            if models is None:
+                models = len(value)
+            elif models != len(value):
+                raise ValueError('Config field {} has wrong length'.format(field))
+    for i in range(models):
+        new_config = {}
+        for field in config_fields:
+            value = config.get(field, None)
+            if value is not None:
+                if isinstance(value, list):
+                    new_config[field] = value[i]
+                else:
+                    new_config[field] = value
+        single_train(new_config)
 
 
 if __name__ == '__main__':

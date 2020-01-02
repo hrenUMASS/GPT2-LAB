@@ -1,9 +1,11 @@
+import numpy as np
 import torch
 import torch.nn.functional as F
 import tqdm
 from torch.utils.data import DataLoader
 
-from codes.main import log_info
+from gpt2_train import get_tensor_batch
+from loggers import log_info
 
 
 def top_k_top_p_filtering(logits, top_k=0, top_p=0.0, filter_value=-float('Inf')):
@@ -64,7 +66,7 @@ def sample_sequence(model, length, context, num_samples=1, temperature=1, top_k=
     return generated
 
 
-def evaluate(model, dataset, batch_size, epochs, epoch_iter, logger=None, n_gpus=1, device=torch.device('cuda:0')):
+def evaluate(model, dataset, batch_size, epochs, epoch_iter, logger=None, n_gpus=1, device=None):
     eval_loss, eval_steps = 0, 0
     losses, perplexities = [], []
     data_loader = DataLoader(dataset, shuffle=False, batch_size=batch_size, collate_fn=lambda x: x)
