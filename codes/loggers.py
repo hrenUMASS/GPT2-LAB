@@ -8,6 +8,8 @@ def get_logger(name, log_file, level=logging.INFO):
     handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'))
     logger = logging.getLogger(name)
     logger.setLevel(level)
+    for hand in logger.handlers:
+        logger.removeHandler(hand)
     logger.addHandler(handler)
     return logger
 

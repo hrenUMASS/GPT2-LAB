@@ -4,8 +4,9 @@ import torch.nn.functional as F
 import tqdm
 from torch.utils.data import DataLoader
 
-from gpt2_train import get_tensor_batch
+from gpt2_train import get_tensor_batch, get_re_data
 from loggers import log_info
+from util import get_model_output
 
 
 def top_k_top_p_filtering(logits, top_k=0, top_p=0.0, filter_value=-float('Inf')):
@@ -66,7 +67,7 @@ def sample_sequence(model, length, context, num_samples=1, temperature=1, top_k=
     return generated
 
 
-def evaluate(model, dataset, batch_size, epochs, epoch_iter, logger=None, n_gpus=1, device=None):
+def evaluate_normal(model, dataset, batch_size, epochs, epoch_iter, logger=None, n_gpus=1, device=None):
     eval_loss, eval_steps = 0, 0
     losses, perplexities = [], []
     data_loader = DataLoader(dataset, shuffle=False, batch_size=batch_size, collate_fn=lambda x: x)
@@ -101,4 +102,41 @@ def evaluate(model, dataset, batch_size, epochs, epoch_iter, logger=None, n_gpus
                                                                              eval_loss / eval_steps))
     eval_loss /= eval_steps
     perplexity = torch.exp(torch.tensor(eval_loss))
+    return perplexity, torch.tensor(perplexities), torch.tensor(losses)
+
+
+def evaluate_re(model, tokenizer, entities, idx, sents, batch_size, epochs, epoch_iter, logger=None, n_gpus=1,
+                device=None, max_len=200):
+    eval_loss, eval_steps = 0, 0
+    losses, perplexities = [], []
+    data_loader = DataLoader(idx, batch_size=batch_size, collate_fn=lambda x: x)
+    # model = nn.DataParallel(model)
+    model.eval()
+    # model.to(device)
+    sents = open(sents, 'r')
+
+    for e in range(epochs):
+        sents.seek(idx.pos)
+        sent_i = 0
+        stored_sent = sents.readline()
+        for step, raw in enumerate(data_loader):
+            data, sent_i, stored_sent = get_re_data(raw, sents, entities, max_len, sent_i, stored_sent, tokenizer)
+            # print(list(map(lambda x: x.shape, data)))
+            with torch.no_grad():
+                loss = get_model_output(model, data)
+                loss_value = loss.item()
+                eval_loss += loss_value
+                eval_steps += 1
+                perplex_value = torch.exp(torch.tensor(eval_loss / eval_steps)).item()
+                perplexities.append(perplex_value)
+                log_info(logger, 'Loss {}, perplexity {}'.format(loss_value, perplex_value))
+                losses.append(loss_value)
+        log_info(logger, '----------------------------------------------------')
+        log_info(logger,
+                 'Epoch {}, Mean Loss {}, Min Loss {}, Accum Loss {}'.format(e, np.mean(losses[e:e + epoch_iter]),
+                                                                             np.min(losses[e: e + epoch_iter]),
+                                                                             eval_loss / eval_steps))
+    eval_loss /= eval_steps
+    perplexity = torch.exp(torch.tensor(eval_loss))
+    sents.close()
     return perplexity, torch.tensor(perplexities), torch.tensor(losses)

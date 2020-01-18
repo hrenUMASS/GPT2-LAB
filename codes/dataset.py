@@ -11,7 +11,7 @@ def _read_block(fp, total_len, tokenizer, max_len=None, valid_func=lambda x: Tru
     raw = fp.readline()
     while raw != '' and i < total_len and k < max_step:
         line = process_func(raw)
-        line = torch.tensor(tokenizer.encode(line, return_tensors='pt')[0], dtype=torch.long)
+        line = tokenizer.encode(line, return_tensors='pt')[0].clone().detach().type(torch.long)
         if valid_func(line):
             if max_len is None or line.shape[0] <= max_len:
                 result.append(line)
@@ -73,10 +73,29 @@ class BlockTextDataset(Dataset):
 class TextDataset(Dataset):
 
     def __init__(self, file_path, tokenizer, total_len, valid_func=lambda x: True,
-                 process_func=lambda x: x, max_len=None, truncate_mode='truncate'):
+                 process_func=lambda x: x, max_len=None, truncate_mode='truncate', with_index=False):
         with open(file_path, 'r') as fp:
             self.data = _read_block(fp, total_len, tokenizer, max_len=max_len, valid_func=valid_func,
                                     process_func=process_func, truncate_mode=truncate_mode)
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, item):
+        return self.data[item]
+
+
+class IdxDataset(Dataset):
+
+    def __init__(self, idx_file, total_len):
+        self.data = []
+        i = 0
+        self.pos = idx_file.tell()
+        line = idx_file.readline()
+        while line and i < total_len:
+            self.data.append(tuple(map(lambda x: int(x), line.split())))
+            line = idx_file.readline()
+            i += 1
 
     def __len__(self):
         return len(self.data)
