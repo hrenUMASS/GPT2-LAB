@@ -3,7 +3,9 @@ import logging
 import torch
 
 
-def get_logger(name, log_file, level=logging.INFO):
+def get_logger(name, log_file, level=logging.INFO, clear=True):
+    if clear:
+        open(log_file, 'w').close()
     handler = logging.FileHandler(log_file)
     handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'))
     logger = logging.getLogger(name)

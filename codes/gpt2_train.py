@@ -79,7 +79,7 @@ def train_re(model, tokenizer, entities, idx, sents, batch_size, epochs, epoch_i
     # SGD
     # fix learning rate
     #
-    sents = open(sents, 'r')
+    # sents = open(sents, 'r')
     optimizer_params = [{'params': [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)],
                          'weight_decay': weight_decay},
                         {'params': [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)],
@@ -95,13 +95,13 @@ def train_re(model, tokenizer, entities, idx, sents, batch_size, epochs, epoch_i
 
     for e in range(epochs):
         epoch_start = time.time()
-        sents.seek(idx.pos)
-        sent_i = 0
-        stored_sent = sents.readline()
+        # sents.seek(idx.pos)
+        # sent_i = 0
+        # stored_sent = sents.readline()
         for step, raw in enumerate(data_loader):
             # print(raw)
 
-            data, sent_i, stored_sent = get_re_data(raw, sents, entities, max_len, sent_i, stored_sent, tokenizer)
+            data = get_re_data(raw, sents, entities, max_len)
             # print(list(map(lambda x: x.shape, data)))
             loss = get_model_output(model, data)
 

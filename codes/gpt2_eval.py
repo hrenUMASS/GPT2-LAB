@@ -113,14 +113,14 @@ def evaluate_re(model, tokenizer, entities, idx, sents, batch_size, epochs, epoc
     # model = nn.DataParallel(model)
     model.eval()
     # model.to(device)
-    sents = open(sents, 'r')
+    # sents = open(sents, 'r')
 
     for e in range(epochs):
-        sents.seek(idx.pos)
-        sent_i = 0
-        stored_sent = sents.readline()
+        # sents.seek(idx.pos)
+        # sent_i = 0
+        # stored_sent = sents.readline()
         for step, raw in enumerate(data_loader):
-            data, sent_i, stored_sent = get_re_data(raw, sents, entities, max_len, sent_i, stored_sent, tokenizer)
+            data = get_re_data(raw, sents, entities, max_len)
             # print(list(map(lambda x: x.shape, data)))
             with torch.no_grad():
                 loss = get_model_output(model, data)

@@ -86,20 +86,31 @@ def single_train(config):
         sent_path = config.get('sent_path', '/iesl/canvas/hren/gpt2_wiki_lab/data/wiki2016_sents_mapped')
         idx_path = config.get('idx_path', lab_ent_data + 'wiki2016_idx')
         idx_file = open(idx_path, 'r')
-        ent_data = []
+        ent_file = open(ent_path, 'r')
+        sent_file = open(sent_path, 'r')
         idx_data = IdxDataset(idx_file, epoch_iter * batch_size)
-        max_ent_i = 0
-        for x in idx_data.data:
-            if x[0] > max_ent_i:
-                max_ent_i = x[0]
-            if x[1] > max_ent_i:
-                max_ent_i = x[1]
+
+        def get_max_ent_sent(idx_data):
+            max_ent, max_sent = 0, 0
+            for x in idx_data.data:
+                if x[0] > max_ent:
+                    max_ent = x[0]
+                if x[1] > max_ent:
+                    max_ent = x[1]
+                if x[2] > max_sent:
+                    max_ent = x[2]
+            return max_ent, max_sent
+
+        max_ent_i, max_sent_i = get_max_ent_sent(idx_data)
+
+        ent_data = TextDataset(ent_file, tokenizer, max_ent_i)
+        sent_data = TextDataset(sent_file, tokenizer, max_sent_i, max_len=max_len)
         log_info(prepare_logger, 'preparing entities')
-        with open(ent_path, 'r') as f:
-            for _ in range(max_ent_i + 1):
-                l = f.readline()
-                enc = tokenizer.encode(l[:-1], return_tensors='pt', add_prefix_space=True)[0]
-                ent_data.append(enc)
+        # with open(ent_path, 'r') as f:
+        #     for _ in range(max_ent_i + 1):
+        #         l = f.readline()
+        #         enc = tokenizer.encode(l[:-1], return_tensors='pt', add_prefix_space=True)[0]
+        #         ent_data.append(enc)
         log_info(prepare_logger, 'entities loaded')
         # idx_filter = np.array(idx_data.data)
         # sent_max_len = idx_data[-1][-1]
@@ -108,13 +119,21 @@ def single_train(config):
 
         # log_info(prepare_logger, 'sentences loaded')
         log_info(cuda_logger, "Allocated data {}".format(cuda_mem_in_mb()))
-        new_model, train_losses = train_re(model, tokenizer, ent_data, idx_data, sent_path, batch_size, epochs,
+        new_model, train_losses = train_re(model, tokenizer, ent_data, idx_data, sent_data, batch_size, epochs,
                                            epoch_iter, learning_rate=learning_rate, weight_decay=weight_decay,
                                            loggers=(cuda_logger, train_logger, loss_logger), n_gpus=n_gpus,
                                            max_len=max_len)
-        eval_data = IdxDataset(idx_file, epoch_iter * batch_size)
-        perplexity, perplexities, eval_losses = evaluate_re(model, tokenizer, ent_data, idx_data, sent_path, batch_size,
+        idx_data = IdxDataset(idx_file, epoch_iter * batch_size)
+
+        max_ent_2, max_sent_2 = get_max_ent_sent(idx_data)
+        ent_data = TextDataset(ent_file, tokenizer, max_ent_2 - max_ent_i)
+        sent_data = TextDataset(sent_file, tokenizer, max_sent_2 - max_sent_i, max_len=max_len)
+
+        perplexity, perplexities, eval_losses = evaluate_re(model, tokenizer, ent_data, idx_data, sent_data, batch_size,
                                                             epochs, epoch_iter, logger=validation_logger, n_gpus=n_gpus)
+        idx_file.close()
+        ent_file.close()
+        sent_file.close()
     else:
         model = tfm.GPT2LMHeadModel.from_pretrained(load_path)
         model = model.to(device)

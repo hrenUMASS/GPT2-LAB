@@ -1,19 +1,19 @@
 import numpy as np
-import torch
+import transformers as tfm
 from torch.utils.data import Dataset
 
 
-def _read_block(fp, total_len, tokenizer, max_len=None, valid_func=lambda x: True, process_func=lambda x: x,
+def _read_block(fp, total_len, tokenizer: tfm.PreTrainedTokenizer, max_len=None, valid_func=lambda x: True,
+                process_func=lambda x: x,
                 truncate_mode='truncate', max_step=np.inf):
     result = []
     i, k = 0, 0
-
     raw = fp.readline()
     while raw != '' and i < total_len and k < max_step:
         line = process_func(raw)
-        line = tokenizer.encode(line, return_tensors='pt')[0].clone().detach().type(torch.long)
+        line = tokenizer.encode(line, add_prefix_space=True) + [tokenizer.eos_token_id]
         if valid_func(line):
-            if max_len is None or line.shape[0] <= max_len:
+            if max_len is None or len(line) <= max_len:
                 result.append(line)
                 # print('normal', result[-1].shape)
                 i += 1
@@ -24,7 +24,7 @@ def _read_block(fp, total_len, tokenizer, max_len=None, valid_func=lambda x: Tru
                     i += 1
                 elif truncate_mode == 'append':
                     k = 0
-                    while k < line.shape[0]:
+                    while k < len(line):
                         result.append(line[k:k + max_len])
                         # print('append', result[-1].shape)
                         k += max_len
@@ -72,9 +72,13 @@ class BlockTextDataset(Dataset):
 
 class TextDataset(Dataset):
 
-    def __init__(self, file_path, tokenizer, total_len, valid_func=lambda x: True,
-                 process_func=lambda x: x, max_len=None, truncate_mode='truncate', with_index=False):
-        with open(file_path, 'r') as fp:
+    def __init__(self, fp, tokenizer, total_len, valid_func=lambda x: True,
+                 process_func=lambda x: x, max_len=None, truncate_mode='truncate'):
+        if isinstance(fp, str):
+            with open(fp, 'r') as f:
+                self.data = _read_block(f, total_len, tokenizer, max_len=max_len, valid_func=valid_func,
+                                        process_func=process_func, truncate_mode=truncate_mode)
+        else:
             self.data = _read_block(fp, total_len, tokenizer, max_len=max_len, valid_func=valid_func,
                                     process_func=process_func, truncate_mode=truncate_mode)
 

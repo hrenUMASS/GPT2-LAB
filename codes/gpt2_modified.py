@@ -40,25 +40,8 @@ class GPT2REModel(GPT2PreTrainedModel):
         self.h = nn.ModuleList([Block(config.n_ctx, config, scale=True) for _ in range(config.n_layer)])
         self.ln_f = nn.LayerNorm(config.n_embd, eps=config.layer_norm_epsilon)
 
-        self.e1e = nn.Sequential(
-            nn.Embedding(config.vocab_size, config.n_embd),
-            nn.Linear(config.n_embd, config.n_embd, bias=False),
-        )
-
-        self.e2e = nn.Sequential(
-            nn.Embedding(config.vocab_size, config.n_embd),
-            nn.Linear(config.n_embd, config.n_embd, bias=False),
-        )
-
-        self.e1p = nn.Sequential(
-            nn.Embedding(config.n_positions, config.n_embd),
-            nn.Linear(config.n_embd, config.n_embd, bias=False),
-        )
-
-        self.e2p = nn.Sequential(
-            nn.Embedding(config.n_positions, config.n_embd),
-            nn.Linear(config.n_embd, config.n_embd, bias=False),
-        )
+        self.ent = nn.Linear(config.n_embd, config.n_embd)
+        self.pos = nn.Linear(config.n_embd, config.n_embd)
 
         self.init_weights()
 
@@ -75,86 +58,59 @@ class GPT2REModel(GPT2PreTrainedModel):
         for layer, heads in heads_to_prune.items():
             self.h[layer].attn.prune_heads(heads)
 
-    def forward(self, e1_ids, e2_ids, e1_mask, e2_mask, input_ids=None, past=None,
-                attention_mask=None, token_type_ids=None, position_ids=None, head_mask=None, inputs_embeds=None):
-        if input_ids is not None and inputs_embeds is not None:
-            raise ValueError("You cannot specify both input_ids and inputs_embeds at the same time")
-        elif input_ids is not None:
-            input_shape = input_ids.size()
-            input_ids = input_ids.view(-1, input_shape[-1])
-        elif inputs_embeds is not None:
-            input_shape = inputs_embeds.size()[:-1]
-        else:
-            raise ValueError("You have to specify either input_ids or inputs_embeds")
+    def forward(self, e1_ids, e2_ids, e1_mask, e2_mask, input_ids=None,
+                attention_mask=None, token_type_ids=None):
 
         e1_shape = e1_ids.size()
         e2_shape = e2_ids.size()
+        input_shape = torch.Size([e1_shape[0], 0])
+
+        device = e1_ids.device
+
+        if input_ids is not None:
+            input_shape = input_ids.size()
 
         if token_type_ids is not None:
             token_type_ids = token_type_ids.view(-1, input_shape[-1])
-        if position_ids is not None:
-            position_ids = position_ids.view(-1, input_shape[-1])
 
-        if past is None:
-            past_length = 0
-            past = [None] * len(self.h)
-        else:
-            past_length = past[0][0].size(-2)
-        if position_ids is None:
-            device = input_ids.device if input_ids is not None else inputs_embeds.device
-            position_ids = torch.arange(past_length, input_shape[-1] + past_length, dtype=torch.long, device=device)
-            position_ids = position_ids.unsqueeze(0).view(-1, input_shape[-1])
-
-        attention_mask = torch.cat((e1_mask, e2_mask, attention_mask), dim=-1)
-
-        # Attention mask.
-        if attention_mask is not None:
-            attention_mask = attention_mask.view(-1, input_shape[-1] + e1_shape[-1] + e2_shape[-1])
-            attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
-
-            attention_mask = attention_mask.to(dtype=next(self.parameters()).dtype)  # fp16 compatibility
-            attention_mask = (1.0 - attention_mask) * -10000.0
-
-        # Prepare head mask if needed
-        # 1.0 in head_mask indicate we keep the head
-        # attention_probs has shape bsz x n_heads x N x N
-        # head_mask has shape n_layer x batch x n_heads x N x N
-        if head_mask is not None:
-            if head_mask.dim() == 1:
-                head_mask = head_mask.unsqueeze(0).unsqueeze(0).unsqueeze(-1).unsqueeze(-1)
-                head_mask = head_mask.expand(self.config.n_layer, -1, -1, -1, -1)
-            elif head_mask.dim() == 2:
-                head_mask = (
-                    head_mask.unsqueeze(1).unsqueeze(-1).unsqueeze(-1)
-                )  # We can specify head_mask for each layer
-            head_mask = head_mask.to(
-                dtype=next(self.parameters()).dtype
-            )  # switch to fload if need + fp16 compatibility
-        else:
-            head_mask = [None] * self.config.n_layer
-
-        if inputs_embeds is None:
-            inputs_embeds = self.wte(input_ids)
-        position_embeds = self.wpe(position_ids)
         if token_type_ids is not None:
             token_type_embeds = self.wte(token_type_ids)
         else:
             token_type_embeds = 0
 
-        device = input_ids.device if input_ids is not None else inputs_embeds.device
+        if input_ids is not None:
+            input_ids = input_ids.view(-1, input_shape[-1])
+
         e1_ids = e1_ids.view(-1, e1_shape[-1])
         e2_ids = e2_ids.view(-1, e2_shape[-1])
-        e1_embeds = self.e1e(e1_ids)
-        e2_embeds = self.e2e(e2_ids)
-        e1_pos_ids = torch.arange(0, e1_shape[-1], dtype=torch.long, device=device)
-        e1_pos_ids = e1_pos_ids.unsqueeze(0).view(-1, e1_shape[-1])
-        e2_pos_ids = torch.arange(0, e2_shape[-1], dtype=torch.long, device=device)
-        e2_pos_ids = e2_pos_ids.unsqueeze(0).view(-1, e2_shape[-1])
-        e1_pos_embeds = self.e1p(e1_pos_ids)
-        e2_pos_embeds = self.e2p(e2_pos_ids)
+        e1_embeds = self.wte(e1_ids)
+        e2_embeds = self.wte(e2_ids)
+        ent_embeds = self.ent(torch.cat((e1_embeds, e2_embeds), dim=-2))
 
-        inputs_embeds = torch.cat((e1_embeds, e2_embeds, inputs_embeds), dim=-2)
-        position_embeds = torch.cat((e1_pos_embeds, e2_pos_embeds, position_embeds), dim=-2)
+        e1_pos_ids = torch.arange(0, e1_shape[-1], dtype=torch.long, device=device).unsqueeze(0).view(-1, e1_shape[-1])
+        e2_pos_ids = torch.arange(0, e2_shape[-1], dtype=torch.long, device=device).unsqueeze(0).view(-1, e2_shape[-1])
+        e1_pos_embeds = self.wpe(e1_pos_ids)
+        e2_pos_embeds = self.wpe(e2_pos_ids)
+        pos_embeds = self.pos(torch.cat((e1_pos_embeds, e2_pos_embeds), dim=-2))
+
+        if input_ids is not None:
+            position_ids = torch.arange(0, input_shape[-1], dtype=torch.long, device=device)
+            position_ids = position_ids.unsqueeze(0).view(-1, input_shape[-1])
+            position_embeds = self.wpe(position_ids)
+            inputs_embeds = torch.cat((ent_embeds, self.wte(input_ids)), dim=-2)
+            position_embeds = torch.cat((pos_embeds, position_embeds), dim=-2)
+            attention_mask = torch.cat((e1_mask, e2_mask, attention_mask), dim=-1)
+        else:
+            inputs_embeds = ent_embeds
+            position_embeds = pos_embeds
+            attention_mask = torch.cat((e1_mask, e2_mask), dim=-1)
+
+        attention_mask = attention_mask.view(-1, input_shape[-1] + e1_shape[-1] + e2_shape[-1])
+        attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
+
+        attention_mask = attention_mask.to(dtype=next(self.parameters()).dtype)  # fp16 compatibility
+        attention_mask = (attention_mask - 1.0) * 10000.0
+
         # print(e1_mask.shape, e2_mask.shape, attention_mask.shape)
 
         hidden_states = inputs_embeds + position_embeds + token_type_embeds
@@ -167,13 +123,11 @@ class GPT2REModel(GPT2PreTrainedModel):
         presents = ()
         all_attentions = []
         all_hidden_states = ()
-        for i, (block, layer_past) in enumerate(zip(self.h, past)):
+        for i, block in enumerate(self.h):
             if self.output_hidden_states:
                 all_hidden_states = all_hidden_states + (hidden_states.view(*output_shape),)
 
-            outputs = block(
-                hidden_states, layer_past=layer_past, attention_mask=attention_mask, head_mask=head_mask[i]
-            )
+            outputs = block(hidden_states, attention_mask=attention_mask)
 
             hidden_states, present = outputs[:2]
             if self.output_past:
