@@ -59,24 +59,24 @@ class GPT2REModel(GPT2PreTrainedModel):
             self.h[layer].attn.prune_heads(heads)
 
     def forward(self, e1_ids, e2_ids, e1_mask, e2_mask, input_ids=None,
-                attention_mask=None, token_type_ids=None):
+                attn_mask=None):
 
         e1_shape = e1_ids.size()
         e2_shape = e2_ids.size()
         input_shape = torch.Size([e1_shape[0], 0])
 
+        e1_type = torch.zeros(e1_shape, dtype=torch.long)
+        e2_type = torch.ones(e2_shape, dtype=torch.long)
+        token_type_ids = torch.cat((e1_type, e2_type), dim=-1)
+
         device = e1_ids.device
 
         if input_ids is not None:
             input_shape = input_ids.size()
+            input_type = 2 * torch.ones(input_shape, dtype=torch.long)
+            token_type_ids = torch.cat((token_type_ids, input_type), dim=-1)
 
-        if token_type_ids is not None:
-            token_type_ids = token_type_ids.view(-1, input_shape[-1])
-
-        if token_type_ids is not None:
-            token_type_embeds = self.wte(token_type_ids)
-        else:
-            token_type_embeds = 0
+        token_type_ids = token_type_ids.view(-1, input_shape[-1])
 
         if input_ids is not None:
             input_ids = input_ids.view(-1, input_shape[-1])
@@ -85,25 +85,24 @@ class GPT2REModel(GPT2PreTrainedModel):
         e2_ids = e2_ids.view(-1, e2_shape[-1])
         e1_embeds = self.wte(e1_ids)
         e2_embeds = self.wte(e2_ids)
-        ent_embeds = self.ent(torch.cat((e1_embeds, e2_embeds), dim=-2))
 
         e1_pos_ids = torch.arange(0, e1_shape[-1], dtype=torch.long, device=device).unsqueeze(0).view(-1, e1_shape[-1])
         e2_pos_ids = torch.arange(0, e2_shape[-1], dtype=torch.long, device=device).unsqueeze(0).view(-1, e2_shape[-1])
         e1_pos_embeds = self.wpe(e1_pos_ids)
         e2_pos_embeds = self.wpe(e2_pos_ids)
-        pos_embeds = self.pos(torch.cat((e1_pos_embeds, e2_pos_embeds), dim=-2))
+
+        inputs_embeds = self.ent(torch.cat((e1_embeds, e2_embeds), dim=-2))
+        position_embeds = self.pos(torch.cat((e1_pos_embeds, e2_pos_embeds), dim=-2))
+        attention_mask = torch.cat((e1_mask, e2_mask), dim=-1)
+        token_type_embeds = self.wte(token_type_ids)
 
         if input_ids is not None:
             position_ids = torch.arange(0, input_shape[-1], dtype=torch.long, device=device)
             position_ids = position_ids.unsqueeze(0).view(-1, input_shape[-1])
-            position_embeds = self.wpe(position_ids)
-            inputs_embeds = torch.cat((ent_embeds, self.wte(input_ids)), dim=-2)
-            position_embeds = torch.cat((pos_embeds, position_embeds), dim=-2)
-            attention_mask = torch.cat((e1_mask, e2_mask, attention_mask), dim=-1)
-        else:
-            inputs_embeds = ent_embeds
-            position_embeds = pos_embeds
-            attention_mask = torch.cat((e1_mask, e2_mask), dim=-1)
+            pos_embeds = self.wpe(position_ids)
+            inputs_embeds = torch.cat((inputs_embeds, self.wte(input_ids)), dim=-2)
+            position_embeds = torch.cat((position_embeds, pos_embeds), dim=-2)
+            attention_mask = torch.cat((attention_mask, attn_mask), dim=-1)
 
         attention_mask = attention_mask.view(-1, input_shape[-1] + e1_shape[-1] + e2_shape[-1])
         attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
@@ -179,12 +178,9 @@ class GPT2LMREModel(GPT2PreTrainedModel):
         return inputs
 
     def forward(self, e1_ids, e2_ids, e1_mask, e2_mask, e1_labels=None, e2_labels=None, input_ids=None,
-                past=None, attention_mask=None, token_type_ids=None, position_ids=None,
-                head_mask=None, inputs_embeds=None, labels=None):
+                attention_mask=None, labels=None):
         transformer_outputs = self.transformer(e1_ids=e1_ids, e2_ids=e2_ids, e1_mask=e1_mask, e2_mask=e2_mask,
-                                               past=past, input_ids=input_ids, attention_mask=attention_mask,
-                                               token_type_ids=token_type_ids, position_ids=position_ids,
-                                               head_mask=head_mask, inputs_embeds=inputs_embeds)
+                                               input_ids=input_ids, attention_mask=attention_mask)
         hidden_states = transformer_outputs[0]
 
         lm_logits = self.lm_head(hidden_states)
