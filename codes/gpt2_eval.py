@@ -120,7 +120,7 @@ def evaluate_re(model, tokenizer, entities, idx, sents, batch_size, epochs, epoc
         # sent_i = 0
         # stored_sent = sents.readline()
         for step, raw in enumerate(data_loader):
-            data = get_re_data(raw, sents, entities, max_len)
+            data = get_re_data(raw, entities, max_len, sent_batch=sents)
             # print(list(map(lambda x: x.shape, data)))
             with torch.no_grad():
                 loss = get_model_output(model, data)

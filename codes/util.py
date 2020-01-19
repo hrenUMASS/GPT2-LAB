@@ -39,9 +39,12 @@ def get_tensor_batch(batch):
     return torch.stack(batch), labels, attn_mask
 
 
-def get_re_data(raw, sents, entities, max_len):
+def get_re_data(raw, entities, max_len, sent_batch=None):
     # print(len(e1))
-    sent, e1, e2 = [], [], []
+    sents, ent1s, ent2s = [], [], []
+
+    def long_tensors(*x):
+        return [torch.tensor(item, dtype=torch.long) for item in x]
 
     # print(raw)
     for i in range(len(raw)):
@@ -53,26 +56,31 @@ def get_re_data(raw, sents, entities, max_len):
         # sent_i += 1
         # sent_tensor = tokenizer.encode(stored_sent, return_tensors='pt', add_prefix_space=True)[0]
 
-        ent1, ent2 = entities[x[0]], entities[x[1]]
-        sent_tensor = torch.tensor(sents[sent_id], dtype=torch.long)
+        if sent_batch is not None:
+            sent = long_tensors(sent_batch[sent_id])[0]
+
+        ent1, ent2 = entities[x[0]], entities[x[1]],
+        ent1, ent2 = long_tensors(ent1, ent2)
         if ent1.shape[0] > 0 and ent2.shape[0] > 0:
-            if sent_tensor.shape[0] > max_len:
-                ent_index = get_index(sent_tensor, ent2) + ent2.shape[0]
+            if sent_batch is not None and sent.shape[0] > max_len:
+                ent_index = get_index(sent, ent2) + ent2.shape[0]
                 if ent_index > max_len:
                     continue
                 else:
-                    sent_tensor = sent_tensor[:max_len]
-            e1.append(ent1)
-            e2.append(ent2)
-            sent.append(sent_tensor)
+                    sent = sent[:max_len]
+                sents.append(sent)
+            ent1s.append(ent1)
+            ent2s.append(ent2)
     # sent = [sents[x[2]] for x in raw]
     # print(e1, e2, sent)
     # print('empties', len([x for x in e1 if x.shape[0] == 0]))
-    e1b, e1l, e1m = get_tensor_batch(e1)
-    e2b, e2l, e2m = get_tensor_batch(e2)
-    batch, labels, attn_mask = get_tensor_batch(sent)
-    return {'e1_ids': e1b, 'e1_mask': e1m, 'e1_labels': e1l, 'e2_ids': e2b, 'e2_mask': e2m, 'e2_labels': e2l,
-            'input_ids': batch, 'attention_mask': attn_mask, 'labels': labels}
+    e1b, e1l, e1m = get_tensor_batch(ent1s)
+    e2b, e2l, e2m = get_tensor_batch(ent2s)
+    if sent_batch is not None:
+        batch, labels, attn_mask = get_tensor_batch(sents)
+        return {'e1_ids': e1b, 'e1_mask': e1m, 'e1_labels': e1l, 'e2_ids': e2b, 'e2_mask': e2m, 'e2_labels': e2l,
+                'input_ids': batch, 'attention_mask': attn_mask, 'labels': labels}
+    return {'e1_ids': e1b, 'e1_mask': e1m, 'e1_labels': e1l, 'e2_ids': e2b, 'e2_mask': e2m, 'e2_labels': e2l}
 
 
 def get_model_output(model, data):

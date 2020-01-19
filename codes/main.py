@@ -98,20 +98,20 @@ def single_train(config):
                 if x[1] > max_ent:
                     max_ent = x[1]
                 if x[2] > max_sent:
-                    max_ent = x[2]
+                    max_sent = x[2]
             return max_ent, max_sent
 
         max_ent_i, max_sent_i = get_max_ent_sent(idx_data)
-
+        log_info(prepare_logger, 'preparing entities and sentences')
         ent_data = TextDataset(ent_file, tokenizer, max_ent_i)
         sent_data = TextDataset(sent_file, tokenizer, max_sent_i, max_len=max_len)
-        log_info(prepare_logger, 'preparing entities')
+
         # with open(ent_path, 'r') as f:
         #     for _ in range(max_ent_i + 1):
         #         l = f.readline()
         #         enc = tokenizer.encode(l[:-1], return_tensors='pt', add_prefix_space=True)[0]
         #         ent_data.append(enc)
-        log_info(prepare_logger, 'entities loaded')
+        log_info(prepare_logger, 'entities and sentences loaded, with length {}, {}'.format(max_ent_i, max_sent_i))
         # idx_filter = np.array(idx_data.data)
         # sent_max_len = idx_data[-1][-1]
         # sent_data = []

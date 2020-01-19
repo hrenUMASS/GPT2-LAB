@@ -89,7 +89,7 @@ def train_re(model, tokenizer, entities, idx, sents, batch_size, epochs, epoch_i
                                                     num_training_steps=epochs * epoch_iter)
     losses = []
     # gpu = GPUtil.getGPUs()[0]
-    data_loader = DataLoader(idx, batch_size=batch_size, collate_fn=lambda x: x)
+    data_loader = DataLoader(idx, batch_size=batch_size, collate_fn=lambda x: x, shuffle=True)
     model = nn.DataParallel(model, device_ids)
     model.train()
 
@@ -101,7 +101,7 @@ def train_re(model, tokenizer, entities, idx, sents, batch_size, epochs, epoch_i
         for step, raw in enumerate(data_loader):
             # print(raw)
 
-            data = get_re_data(raw, sents, entities, max_len)
+            data = get_re_data(raw, entities, max_len, sent_batch=sents)
             # print(list(map(lambda x: x.shape, data)))
             loss = get_model_output(model, data)
 
