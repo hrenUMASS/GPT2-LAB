@@ -137,7 +137,7 @@ class IdxDataset(Dataset):
         max_sent = np.max(self.idx_data[:, 2]) - self.senti
         self.ent_data = [self.ent_file.readline() for _ in range(max_ent + 1)]
         for _ in range(max_sent):
-            self.sent_data.append(self.tokenizer.encode(self.sent_file.readline()))
+            self.sent_data.append(self.tokenizer.encode(self.sent_file.readline(), return_tensors='pt'))
 
     def get_total_ent_sent(self):
         return len(self.ent_data), len(self.sent_data)

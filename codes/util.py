@@ -40,6 +40,7 @@ def get_tensor_batch(batch):
 
 
 def get_re_data(data):
+    # print(data)
     e1_data = [x[0] for x in data]
     e2_data = [x[1] for x in data]
     e1b, e1l, e1m = get_tensor_batch(e1_data)
