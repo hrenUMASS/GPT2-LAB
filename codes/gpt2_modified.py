@@ -180,7 +180,7 @@ class GPT2LMREModel(GPT2PreTrainedModel):
     def forward(self, e1_ids, e2_ids, e1_mask, e2_mask, e1_labels=None, e2_labels=None, input_ids=None,
                 attention_mask=None, labels=None):
         transformer_outputs = self.transformer(e1_ids=e1_ids, e2_ids=e2_ids, e1_mask=e1_mask, e2_mask=e2_mask,
-                                               input_ids=input_ids, attention_mask=attention_mask)
+                                               input_ids=input_ids, attn_mask=attention_mask)
         hidden_states = transformer_outputs[0]
 
         lm_logits = self.lm_head(hidden_states)
