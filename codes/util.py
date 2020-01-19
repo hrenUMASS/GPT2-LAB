@@ -46,6 +46,11 @@ def get_re_data(data):
     e2b, e2l, e2m = get_tensor_batch(e2_data)
     if len(data[0]) == 3:
         sent_data = [x[2] for x in data]
+        for d in data:
+            e1, e2, sent = d[0], d[1], d[2]
+            if get_index(sent, e1) == get_index(sent, e2) == -1:
+                print('Entity not in sentence\ne1={}\ne2={}\nsent={}'.format(e1, e2, sent))
+
         batch, labels, attn_mask = get_tensor_batch(sent_data)
         return {'e1_ids': e1b, 'e1_mask': e1m, 'e1_labels': e1l, 'e2_ids': e2b, 'e2_mask': e2m, 'e2_labels': e2l,
                 'input_ids': batch, 'attention_mask': attn_mask, 'labels': labels}
