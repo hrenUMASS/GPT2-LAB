@@ -72,8 +72,8 @@ def train_normal(model, dataset, batch_size, epochs, epoch_iter, learning_rate=1
     return model, torch.tensor(losses)
 
 
-def train_re(model, tokenizer, entities, idx, sents, batch_size, epochs, epoch_iter, learning_rate=1e-2,
-             weight_decay=1e-4, loggers=(None, None, None), n_gpus=1, device=None, max_len=200):
+def train_re(model, idx, batch_size, epochs, epoch_iter, learning_rate=1e-2, weight_decay=1e-4,
+             loggers=(None, None, None), n_gpus=1, device=None):
     no_decay = ['bias', 'LayerNorm.weight']
     device_ids = list(range(n_gpus))
     # SGD
@@ -92,17 +92,14 @@ def train_re(model, tokenizer, entities, idx, sents, batch_size, epochs, epoch_i
     data_loader = DataLoader(idx, batch_size=batch_size, collate_fn=lambda x: x, shuffle=True)
     model = nn.DataParallel(model, device_ids)
     model.train()
-
+    # print(entities)
     for e in range(epochs):
         epoch_start = time.time()
         # sents.seek(idx.pos)
         # sent_i = 0
         # stored_sent = sents.readline()
         for step, raw in enumerate(data_loader):
-            # print(raw)
-
-            data = get_re_data(raw, entities, max_len, sent_batch=sents)
-            # print(list(map(lambda x: x.shape, data)))
+            data = get_re_data(raw)
             loss = get_model_output(model, data)
 
             log_info(loggers[1], '{} Iter Loss {}'.format(step, loss.item()))
@@ -127,5 +124,5 @@ def train_re(model, tokenizer, entities, idx, sents, batch_size, epochs, epoch_i
         log_info(loggers[1],
                  'Time {}, Epoch Time {}, Avg Iter Time {}'.format(datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
                                                                    time_diff, time_diff / epoch_iter))
-    sents.close()
+    # sents.close()
     return model, torch.tensor(losses)

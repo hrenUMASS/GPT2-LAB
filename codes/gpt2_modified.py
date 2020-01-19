@@ -61,22 +61,21 @@ class GPT2REModel(GPT2PreTrainedModel):
     def forward(self, e1_ids, e2_ids, e1_mask, e2_mask, input_ids=None,
                 attn_mask=None):
 
+        device = e1_ids.device
         e1_shape = e1_ids.size()
         e2_shape = e2_ids.size()
         input_shape = torch.Size([e1_shape[0], 0])
 
-        e1_type = torch.zeros(e1_shape, dtype=torch.long)
-        e2_type = torch.ones(e2_shape, dtype=torch.long)
+        e1_type = torch.zeros(e1_shape, dtype=torch.long, device=device)
+        e2_type = torch.ones(e2_shape, dtype=torch.long, device=device)
         token_type_ids = torch.cat((e1_type, e2_type), dim=-1)
-
-        device = e1_ids.device
 
         if input_ids is not None:
             input_shape = input_ids.size()
-            input_type = 2 * torch.ones(input_shape, dtype=torch.long)
+            input_type = 2 * torch.ones(input_shape, dtype=torch.long, device=device)
             token_type_ids = torch.cat((token_type_ids, input_type), dim=-1)
 
-        token_type_ids = token_type_ids.view(-1, input_shape[-1])
+        token_type_ids = token_type_ids.view(-1, input_shape[-1] + e1_shape[-1] + e2_shape[-1])
 
         if input_ids is not None:
             input_ids = input_ids.view(-1, input_shape[-1])

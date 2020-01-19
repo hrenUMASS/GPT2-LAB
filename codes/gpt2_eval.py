@@ -105,8 +105,7 @@ def evaluate_normal(model, dataset, batch_size, epochs, epoch_iter, logger=None,
     return perplexity, torch.tensor(perplexities), torch.tensor(losses)
 
 
-def evaluate_re(model, tokenizer, entities, idx, sents, batch_size, epochs, epoch_iter, logger=None, n_gpus=1,
-                device=None, max_len=200):
+def evaluate_re(model, idx, batch_size, epochs, epoch_iter, logger=None, n_gpus=1, device=None):
     eval_loss, eval_steps = 0, 0
     losses, perplexities = [], []
     data_loader = DataLoader(idx, batch_size=batch_size, collate_fn=lambda x: x)
@@ -120,7 +119,7 @@ def evaluate_re(model, tokenizer, entities, idx, sents, batch_size, epochs, epoc
         # sent_i = 0
         # stored_sent = sents.readline()
         for step, raw in enumerate(data_loader):
-            data = get_re_data(raw, entities, max_len, sent_batch=sents)
+            data = get_re_data(raw)
             # print(list(map(lambda x: x.shape, data)))
             with torch.no_grad():
                 loss = get_model_output(model, data)
@@ -138,5 +137,5 @@ def evaluate_re(model, tokenizer, entities, idx, sents, batch_size, epochs, epoc
                                                                              eval_loss / eval_steps))
     eval_loss /= eval_steps
     perplexity = torch.exp(torch.tensor(eval_loss))
-    sents.close()
+    # sents.close()
     return perplexity, torch.tensor(perplexities), torch.tensor(losses)

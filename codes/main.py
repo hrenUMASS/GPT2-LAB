@@ -88,49 +88,18 @@ def single_train(config):
         idx_file = open(idx_path, 'r')
         ent_file = open(ent_path, 'r')
         sent_file = open(sent_path, 'r')
-        idx_data = IdxDataset(idx_file, epoch_iter * batch_size)
+        idx_dataset = IdxDataset(tokenizer, idx_file, ent_file, sent_file, epoch_iter * batch_size, max_len=max_len)
 
-        def get_max_ent_sent(idx_data):
-            max_ent, max_sent = 0, 0
-            for x in idx_data.data:
-                if x[0] > max_ent:
-                    max_ent = x[0]
-                if x[1] > max_ent:
-                    max_ent = x[1]
-                if x[2] > max_sent:
-                    max_sent = x[2]
-            return max_ent, max_sent
-
-        max_ent_i, max_sent_i = get_max_ent_sent(idx_data)
-        log_info(prepare_logger, 'preparing entities and sentences')
-        ent_data = TextDataset(ent_file, tokenizer, max_ent_i)
-        sent_data = TextDataset(sent_file, tokenizer, max_sent_i, max_len=max_len)
-
-        # with open(ent_path, 'r') as f:
-        #     for _ in range(max_ent_i + 1):
-        #         l = f.readline()
-        #         enc = tokenizer.encode(l[:-1], return_tensors='pt', add_prefix_space=True)[0]
-        #         ent_data.append(enc)
-        log_info(prepare_logger, 'entities and sentences loaded, with length {}, {}'.format(max_ent_i, max_sent_i))
-        # idx_filter = np.array(idx_data.data)
-        # sent_max_len = idx_data[-1][-1]
-        # sent_data = []
-        # log_info(prepare_logger, 'preparing sentences')
-
-        # log_info(prepare_logger, 'sentences loaded')
         log_info(cuda_logger, "Allocated data {}".format(cuda_mem_in_mb()))
-        new_model, train_losses = train_re(model, tokenizer, ent_data, idx_data, sent_data, batch_size, epochs,
+        new_model, train_losses = train_re(model, idx_dataset, batch_size, epochs,
                                            epoch_iter, learning_rate=learning_rate, weight_decay=weight_decay,
-                                           loggers=(cuda_logger, train_logger, loss_logger), n_gpus=n_gpus,
-                                           max_len=max_len)
-        idx_data = IdxDataset(idx_file, epoch_iter * batch_size)
+                                           loggers=(cuda_logger, train_logger, loss_logger), n_gpus=n_gpus)
+        ent_i, sent_i = idx_dataset.get_total_ent_sent()
+        idx_data = IdxDataset(tokenizer, idx_file, ent_file, sent_file, epoch_iter * batch_size, max_len=max_len,
+                              ent_past_index=ent_i, sent_past_index=sent_i)
 
-        max_ent_2, max_sent_2 = get_max_ent_sent(idx_data)
-        ent_data = TextDataset(ent_file, tokenizer, max_ent_2 - max_ent_i)
-        sent_data = TextDataset(sent_file, tokenizer, max_sent_2 - max_sent_i, max_len=max_len)
-
-        perplexity, perplexities, eval_losses = evaluate_re(model, tokenizer, ent_data, idx_data, sent_data, batch_size,
-                                                            epochs, epoch_iter, logger=validation_logger, n_gpus=n_gpus)
+        perplexity, perplexities, eval_losses = evaluate_re(model, idx_data, batch_size, epochs, epoch_iter,
+                                                            logger=validation_logger, n_gpus=n_gpus)
         idx_file.close()
         ent_file.close()
         sent_file.close()
