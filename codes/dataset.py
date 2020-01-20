@@ -2,7 +2,7 @@ import numpy as np
 import transformers as tfm
 from torch.utils.data import Dataset
 
-from util import get_index
+from util import encode
 
 
 def _read_block(fp, total_len, tokenizer: tfm.PreTrainedTokenizer, max_len=None, valid_func=lambda x: True,
@@ -12,7 +12,7 @@ def _read_block(fp, total_len, tokenizer: tfm.PreTrainedTokenizer, max_len=None,
     raw = fp.readline()
     while raw != '' and i < total_len and k < max_step:
         line = process_func(raw)
-        line = tokenizer.encode(line, add_prefix_space=True)
+        line = encode(tokenizer, line, add_prefix_space=True)
         if add_eos:
             line += [tokenizer.eos_token_id]
         if valid_func(line):
@@ -43,7 +43,8 @@ def _read_block(fp, total_len, tokenizer: tfm.PreTrainedTokenizer, max_len=None,
 
 
 def get_tokens(tokenizer, ent):
-    return tokenizer.encode(ent, add_prefix_space=True, return_tensors='pt'), tokenizer.encode(ent, return_tensors='pt')
+    return tokenizer.encode(ent, add_prefix_space=True, return_tensors='pt')[0], \
+           tokenizer.encode(ent, return_tensors='pt')[0]
 
 
 class BlockTextDataset(Dataset):
@@ -96,51 +97,93 @@ class TextDataset(Dataset):
 
 class IdxDataset(Dataset):
 
-    def __init__(self, tokenizer, idx_file, ent_file, sent_file, total_len, max_len=np.inf, ent_past_index=0,
-                 sent_past_index=0):
+    def __init__(self, tokenizer, idx_file, ent_file, sent_file, total_len):
         self.idx_file = idx_file
         self.ent_file = ent_file
         self.sent_file = sent_file
         self.idx_data = []
         i = 0
         line = idx_file.readline()
-        while line and i < total_len:
+        while line and i < total_len * 2:
             self.idx_data.append(tuple(map(lambda x: int(x), line.split())))
             line = idx_file.readline()
             i += 1
         self.idx_data = np.array(self.idx_data)
         self.sent_data = []
         self.ent_data = []
-        self.max_len = max_len
         self.tokenizer = tokenizer
-        self.enti = ent_past_index
-        self.senti = sent_past_index
+        self.eval = False
+        self.total_len = total_len
+        # self.space_encoder = IdxDataset._generate_space_vocab(tokenizer.encoder)
+        # self.space_decoder = {v: k for k, v in self.space_encoder.items()}
 
         self._read_block()
 
     def __len__(self):
-        return len(self.idx_data)
+        return self.total_len
 
     def __getitem__(self, item):
+        if self.eval:
+            item += self.total_len
         idx = self.idx_data[item]
-        e1i, e2i, senti = idx[0] - self.enti, idx[1] - self.enti, idx[2] - self.senti
+        # print('idx', idx, item, idx[0] - self.enti, idx[1] - self.enti, idx[2] - self.senti)
+        e1i, e2i, senti = idx[0], idx[1], idx[2]
+        # print(e1i, e2i, senti)
+        # print('e1', e1i, idx[0])
+        # print('e2', e2i, idx[1])
+        # print('sent', senti, idx[2])
         e1, e2, sent = self.ent_data[e1i], self.ent_data[e2i], self.sent_data[senti]
-        e1tp, e1t = get_tokens(self.tokenizer, e1)
-        e2tp, e2t = get_tokens(self.tokenizer, e2)
-        e1 = e1tp if get_index(sent, e1tp) != -1 else e1t
-        e2 = e2tp if get_index(sent, e2tp) != -1 else e2t
+        e1, e2 = self.unify_entity(e1, sent), self.unify_entity(e2, sent)
+        # print(e1, e2, sent)
         return e1, e2, sent, idx
 
     def _read_block(self):
-
-        max_ent = np.max(self.idx_data[:, [0, 1]]) - self.enti
-        max_sent = np.max(self.idx_data[:, 2]) - self.senti
-        self.ent_data = [self.ent_file.readline() for _ in range(max_ent + 1)]
-        for _ in range(max_sent):
-            self.sent_data.append(self.tokenizer.encode(self.sent_file.readline(), return_tensors='pt'))
+        max_ent = np.max(self.idx_data[:, [0, 1]])
+        max_sent = np.max(self.idx_data[:, 2])
+        # print(np.max(self.idx_data[:, [0, 1]]), self.enti, max_ent)
+        # print(np.max(self.idx_data[:, 2]), self.senti, max_sent)
+        self.ent_data = [self.ent_file.readline()[:-1] for _ in range(max_ent + 1)]
+        # print(self.idx_data)
+        # print(list(enumerate(self.ent_data)))
+        pos = self.sent_file.tell()
+        # print(list(enumerate([self.sent_file.readline()[:-1] for _ in range(max_sent + 1)])))
+        self.sent_file.seek(pos)
+        for _ in range(max_sent + 1):
+            self.sent_data.append(
+                encode(self.tokenizer, self.sent_file.readline()[:-1], add_eos=True, add_prefix_space=True))
 
     def get_total_ent_sent(self):
         return len(self.ent_data), len(self.sent_data)
+
+    def unify_entity(self, ent, sent):
+        def in_tensor(ent, sent_tok, idx):
+            tot = ''
+            for k in range(idx, len(sent_tok)):
+                temp = sent_tok[k].replace(space, '')
+                tot = (tot + temp) if ent.startswith(tot + temp) else (
+                    (tot + space + temp) if ent.startswith(tot + space + temp) else None)
+                # print(temp, tot)
+                if tot is None:
+                    return None
+                elif tot == ent:
+                    return sent_tok[idx: k + 1]
+
+        space = 'Ġ'
+        sent_tok = self.tokenizer.convert_ids_to_tokens(sent)
+        ent_temp = ''.join(self.tokenizer.tokenize(ent))
+        # print(ent_temp)
+        for i in range(len(sent_tok)):
+            temp = sent_tok[i].replace(space, '')
+            if ent_temp.startswith(temp):
+                ent_tok = in_tensor(ent_temp, sent_tok, i)
+                if ent_tok is not None:
+                    # print(True)
+                    return encode(self.tokenizer, ent_tok)
+        return encode(self.tokenizer, ent)
+
+    def change_mode(self, evaluate=True):
+        self.eval = evaluate
+        return self
 
 
 if __name__ == '__main__':

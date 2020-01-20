@@ -65,7 +65,7 @@ class GPT2REModel(GPT2PreTrainedModel):
         e1_shape = e1_ids.size()
         e2_shape = e2_ids.size()
         input_shape = torch.Size([e1_shape[0], 0])
-
+        # print(e1_shape, e2_shape, input_ids.shape)
         e1_type = torch.zeros(e1_shape, dtype=torch.long, device=device)
         e2_type = torch.ones(e2_shape, dtype=torch.long, device=device)
         token_type_ids = torch.cat((e1_type, e2_type), dim=-1)
@@ -90,11 +90,13 @@ class GPT2REModel(GPT2PreTrainedModel):
         e1_pos_embeds = self.wpe(e1_pos_ids)
         e2_pos_embeds = self.wpe(e2_pos_ids)
 
-        inputs_embeds = self.ent(torch.cat((e1_embeds, e2_embeds), dim=-2))
-        position_embeds = self.pos(torch.cat((e1_pos_embeds, e2_pos_embeds), dim=-2))
+        inputs_embeds = torch.cat((e1_embeds, e2_embeds), dim=-2)
+        inputs_embeds = self.ent(inputs_embeds)
+        position_embeds = torch.cat((e1_pos_embeds, e2_pos_embeds), dim=-2)
+        position_embeds = self.pos(position_embeds)
         attention_mask = torch.cat((e1_mask, e2_mask), dim=-1)
         token_type_embeds = self.wte(token_type_ids)
-
+        # token_type_embeds = 0
         if input_ids is not None:
             position_ids = torch.arange(0, input_shape[-1], dtype=torch.long, device=device)
             position_ids = position_ids.unsqueeze(0).view(-1, input_shape[-1])

@@ -105,7 +105,7 @@ def evaluate_normal(model, dataset, batch_size, epochs, epoch_iter, logger=None,
     return perplexity, torch.tensor(perplexities), torch.tensor(losses)
 
 
-def evaluate_re(model, idx, batch_size, epochs, epoch_iter, logger=None, n_gpus=1, device=None):
+def evaluate_re(model, idx, batch_size, epochs, epoch_iter, logger=None, n_gpus=1, device=None, max_len=512):
     eval_loss, eval_steps = 0, 0
     losses, perplexities = [], []
     data_loader = DataLoader(idx, batch_size=batch_size, collate_fn=lambda x: x)
@@ -119,7 +119,7 @@ def evaluate_re(model, idx, batch_size, epochs, epoch_iter, logger=None, n_gpus=
         # sent_i = 0
         # stored_sent = sents.readline()
         for step, raw in enumerate(data_loader):
-            data = get_re_data(raw)
+            data = get_re_data(raw, max_len=max_len)
             # print(list(map(lambda x: x.shape, data)))
             with torch.no_grad():
                 loss = get_model_output(model, data)
@@ -130,12 +130,13 @@ def evaluate_re(model, idx, batch_size, epochs, epoch_iter, logger=None, n_gpus=
                 perplexities.append(perplex_value)
                 log_info(logger, 'Loss {}, perplexity {}'.format(loss_value, perplex_value))
                 losses.append(loss_value)
+        loss_seg = losses[e * epoch_iter:]
         log_info(logger, '----------------------------------------------------')
         log_info(logger,
-                 'Epoch {}, Mean Loss {}, Min Loss {}, Accum Loss {}'.format(e, np.mean(losses[e:e + epoch_iter]),
-                                                                             np.min(losses[e: e + epoch_iter]),
+                 'Epoch {}, Mean Loss {}, Min Loss {}, Accum Loss {}'.format(e, np.mean(loss_seg), np.min(loss_seg),
                                                                              eval_loss / eval_steps))
     eval_loss /= eval_steps
     perplexity = torch.exp(torch.tensor(eval_loss))
+    print('perplexity: ', perplexity)
     # sents.close()
     return perplexity, torch.tensor(perplexities), torch.tensor(losses)

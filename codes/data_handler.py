@@ -7,30 +7,51 @@ def while_replace(string):
 def data_mapping(fp1, fp2, save_path, read_lines=10000000):
     # conn = sqlite3.connect(db)
     # c = conn.cursor()
-    with open(fp1, 'r') as f1, open(fp2, 'r+') as f2, \
-            open(save_path, 'r+') as save:
+    with open(fp1, 'r') as f1, open(fp2, 'r') as f2, open(save_path, 'w+') as save, open(save_path + '.temp',
+                                                                                         'w+') as save_temp:
         buff = build_database(f1, read_lines=read_lines)
-        # indexes = set()
-        temp = True
+        indexes = set()
+        max_ind = 0
+        origin = False
         while len(buff) != 0:
-            f2.seek(0)
             save.seek(0)
-            # index = 0
-            use = save if temp else f2
-            ori = f2 if temp else save
-            print("ori {} f2 {}".format(ori.name, f2.name))
-            line = ori.readline()
-            while line:
+            save_temp.seek(0)
+            index = 0
+            # print("ori {} f2 {}".format(ori.name, f2.name))
+            if origin:
+                f2 = save
+                save, save_temp = save_temp, save
+            for line in f2:
+                if not origin:
+                    max_ind += 1
                 # if index not in indexes:
                 line_id = line.replace(' ', '')
                 line = buff.get(line_id, line)
-                # indexes.add(index)
-                use.write(line)
-                line = ori.readline()
-            use.truncate()
-            temp = not temp
+                indexes.add(index)
+                index += 1
+                line += '' if line[-1] == '\n' else '\n'
+                save.write(line)
+            origin = True
+            save.truncate()
             buff = build_database(f1, read_lines=read_lines)
-        print('ori: {}, use: {}'.format(ori.name, use.name))
+        print('save: ', save.name, 'index: ', len(indexes) / max_ind)
+        f2.seek(0)
+        save.seek(0)
+        line = f2.readline()
+        line2 = save.readline()
+        same = 0
+        print('-------------------------------------')
+        while line != '' or line2 != '':
+            if line.replace(' ', '') != line2.replace(' ', ''):
+                print(line, line2)
+            if line != '':
+                line = f2.readline()
+            if line2 != '':
+                line2 = save.readline()
+            same += 1
+        print(same / max_ind)
+        print('save: ', save.name, 'index: ', len(indexes) / max_ind)
+        # print('ori: {}, use: {}'.format(ori.name, use.name))
 
     # conn.close()
 
@@ -71,7 +92,7 @@ def build_database(f, read_lines=10000000):
 if __name__ == '__main__':
     data_path = '/iesl/canvas/hschang/language_modeling/NSD_for_sentence_embedding/data/raw/'
     f1 = data_path + 'wiki2016_both.txt'
-    f2 = '/iesl/canvas/hren/gpt2_wiki_lab/data/wiki2016_sents'
+    f2 = '/iesl/canvas/hschang/language_modeling/NSD_for_sentence_embedding/data/raw/wiki2016_nchunk_entity_agg/wiki2016_sents'
     save = '/iesl/canvas/hren/gpt2_wiki_lab/data/wiki2016_sents_mapped'
     # data_path = '../../data/wiki2016_'
     # f1 = data_path + 'both.txt'

@@ -88,18 +88,18 @@ def single_train(config):
         idx_file = open(idx_path, 'r')
         ent_file = open(ent_path, 'r')
         sent_file = open(sent_path, 'r')
-        idx_dataset = IdxDataset(tokenizer, idx_file, ent_file, sent_file, epoch_iter * batch_size, max_len=max_len)
-
+        idx_dataset = IdxDataset(tokenizer, idx_file, ent_file, sent_file, epoch_iter * batch_size)
+        ent_i, sent_i = idx_dataset.get_total_ent_sent()
+        log_info(prepare_logger, 'Load entities {}, sentences {}'.format(ent_i, sent_i))
         log_info(cuda_logger, "Allocated data {}".format(cuda_mem_in_mb()))
+        log_info(cuda_logger, 'GPU Free {} Used {} Total {}'.format(gpu.memoryFree, gpu.memoryUsed, gpu.memoryTotal))
         new_model, train_losses = train_re(model, idx_dataset, batch_size, epochs,
                                            epoch_iter, learning_rate=learning_rate, weight_decay=weight_decay,
-                                           loggers=(cuda_logger, train_logger, loss_logger), n_gpus=n_gpus)
-        ent_i, sent_i = idx_dataset.get_total_ent_sent()
-        idx_data = IdxDataset(tokenizer, idx_file, ent_file, sent_file, epoch_iter * batch_size, max_len=max_len,
-                              ent_past_index=ent_i, sent_past_index=sent_i)
-
-        perplexity, perplexities, eval_losses = evaluate_re(model, idx_data, batch_size, epochs, epoch_iter,
-                                                            logger=validation_logger, n_gpus=n_gpus)
+                                           loggers=(cuda_logger, train_logger, loss_logger), n_gpus=n_gpus,
+                                           max_len=max_len)
+        idx_dataset.change_mode()
+        perplexity, perplexities, eval_losses = evaluate_re(new_model, idx_dataset, batch_size, epochs, epoch_iter,
+                                                            logger=validation_logger, n_gpus=n_gpus, max_len=max_len)
         idx_file.close()
         ent_file.close()
         sent_file.close()

@@ -73,7 +73,7 @@ def train_normal(model, dataset, batch_size, epochs, epoch_iter, learning_rate=1
 
 
 def train_re(model, idx, batch_size, epochs, epoch_iter, learning_rate=1e-2, weight_decay=1e-4,
-             loggers=(None, None, None), n_gpus=1, device=None):
+             loggers=(None, None, None), n_gpus=1, device=None, max_len=512):
     no_decay = ['bias', 'LayerNorm.weight']
     device_ids = list(range(n_gpus))
     # SGD
@@ -90,6 +90,7 @@ def train_re(model, idx, batch_size, epochs, epoch_iter, learning_rate=1e-2, wei
     losses = []
     # gpu = GPUtil.getGPUs()[0]
     data_loader = DataLoader(idx, batch_size=batch_size, collate_fn=lambda x: x, shuffle=True)
+    print(len(data_loader))
     model = nn.DataParallel(model, device_ids)
     model.train()
     # print(entities)
@@ -99,27 +100,30 @@ def train_re(model, idx, batch_size, epochs, epoch_iter, learning_rate=1e-2, wei
         # sent_i = 0
         # stored_sent = sents.readline()
         for step, raw in enumerate(data_loader):
-            data = get_re_data(raw)
+            data = get_re_data(raw, max_len=max_len)
+            print('data length', data['e1_ids'].shape[1] + data['e2_ids'].shape[1] + data['input_ids'].shape[1])
+            # print(data['e1_ids'].shape, data['e2_ids'].shape, data.get('input_ids', torch.tensor([])).shape)
+            # print({k: v.shape for k, v in data.items()})
             loss = get_model_output(model, data)
 
             log_info(loggers[1], '{} Iter Loss {}'.format(step, loss.item()))
             loss_value = loss.item()
-            if len(losses) > 0 and abs(loss_value - losses[-1]) > 0.5:
-                log_info(loggers[2], 'Huge Loss Change Detected {}\n{}'.format(loss_value - losses[-1], raw))
-                # continue
+            # if len(losses) > 0 and abs(loss_value - losses[-1]) > 0.5:
+            #     log_info(loggers[2], 'Huge Loss Change Detected {}\n{}'.format(loss_value - losses[-1], raw))
+            # continue
             loss.backward()
-            print('backward achieved')
+            # print('backward achieved')
             # if (step + 1) % 10 == 0:
             nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
             scheduler.step()
             model.zero_grad()
             losses.append(loss_value)
+        loss_seg = losses[e * epoch_iter:]
+        print(e * epoch_iter, len(losses))
         log_info(loggers[1], '----------------------------------------------------')
         # print(e * epoch_iter, (e + 1) * epoch_iter, losses[e])
-        log_info(loggers[1],
-                 'Epoch {}, Mean Loss {}, Min Loss {}'.format(e, np.mean(losses[e:e + epoch_iter]),
-                                                              np.min(losses[e: e + epoch_iter])))
+        log_info(loggers[1], 'Epoch {}, Mean Loss {}, Min Loss {}'.format(e, np.mean(loss_seg), np.min(loss_seg)))
         time_diff = time.time() - epoch_start
         log_info(loggers[1],
                  'Time {}, Epoch Time {}, Avg Iter Time {}'.format(datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
