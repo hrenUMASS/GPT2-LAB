@@ -6,6 +6,8 @@ from torch.nn import CrossEntropyLoss
 from transformers import GPT2PreTrainedModel
 from transformers.modeling_gpt2 import Block
 
+from util import cat_tensors
+
 
 # import transformers as tfm
 class GELU(nn.Module):
@@ -82,28 +84,39 @@ class GPT2REModel(GPT2PreTrainedModel):
 
         e1_ids = e1_ids.view(-1, e1_shape[-1])
         e2_ids = e2_ids.view(-1, e2_shape[-1])
-        e1_embeds = self.wte(e1_ids)
-        e2_embeds = self.wte(e2_ids)
 
-        e1_pos_ids = torch.arange(0, e1_shape[-1], dtype=torch.long, device=device).unsqueeze(0).view(-1, e1_shape[-1])
-        e2_pos_ids = torch.arange(0, e2_shape[-1], dtype=torch.long, device=device).unsqueeze(0).view(-1, e2_shape[-1])
-        e1_pos_embeds = self.wpe(e1_pos_ids)
-        e2_pos_embeds = self.wpe(e2_pos_ids)
+        def pos_id(length):
+            return torch.arange(0, length, dtype=torch.long, device=device).unsqueeze(0).view(-1, length)
 
-        inputs_embeds = torch.cat((e1_embeds, e2_embeds), dim=-2)
-        inputs_embeds = self.ent(inputs_embeds)
-        position_embeds = torch.cat((e1_pos_embeds, e2_pos_embeds), dim=-2)
-        position_embeds = self.pos(position_embeds)
-        attention_mask = torch.cat((e1_mask, e2_mask), dim=-1)
-        token_type_embeds = self.wte(token_type_ids)
-        # token_type_embeds = 0
-        if input_ids is not None:
-            position_ids = torch.arange(0, input_shape[-1], dtype=torch.long, device=device)
-            position_ids = position_ids.unsqueeze(0).view(-1, input_shape[-1])
-            pos_embeds = self.wpe(position_ids)
-            inputs_embeds = torch.cat((inputs_embeds, self.wte(input_ids)), dim=-2)
-            position_embeds = torch.cat((position_embeds, pos_embeds), dim=-2)
-            attention_mask = torch.cat((attention_mask, attn_mask), dim=-1)
+        input_embeds = []
+        pos_embeds = []
+        attns = []
+        token_embeds = []
+        for i in range(e1_ids.shape[0]):
+            e1_attn, e2_attn = e1_mask[i], e2_mask[i]
+            e1, e2 = e1_ids[i], e2_ids[i]
+            e1, e2 = e1[e1 * (e1_attn - 0.5) > 0], e2[e2 * (e2_attn - 0.5) > 0]
+            attn = torch.cat((e1_attn, e2_attn))
+            input_embed = self.ent(torch.cat((self.wte(e1), self.wte(e2))))
+            pos_embed = self.pos(torch.cat((self.wpe(pos_id(e1.shape[0])), self.wpe(pos_id(e2.shape[0])))))
+            token_type_id = torch.cat((torch.zeros(e1.shape[0]), torch.ones(e2.shape[0])))
+            if input_ids is not None:
+                in_attn = attn_mask[i]
+                in_ids = input_ids[i]
+                in_ids = in_ids[in_ids * (in_attn - 0.5) > 0]
+                attn = torch.cat((attn, in_attn))
+                input_embed = torch.cat((input_embed, self.wte(in_ids)))
+                pos_embed = torch.cat((pos_embed, self.wpe(pos_id(in_ids.shape[0]))))
+                token_type_id = torch.cat((token_type_id, 2 * torch.ones(in_ids.shape[0])))
+            input_embeds.append(input_embed)
+            pos_embeds.append(pos_embed)
+            attns.append(attn)
+            token_embeds.append(self.wte(token_type_id))
+
+        inputs_embeds = cat_tensors(input_embeds, padding=50256)
+        position_embeds = cat_tensors(pos_embeds)
+        token_type_embeds = cat_tensors(token_embeds, padding=2)
+        attention_mask = cat_tensors(attns)
 
         attention_mask = attention_mask.view(-1, input_shape[-1] + e1_shape[-1] + e2_shape[-1])
         attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
@@ -180,6 +193,7 @@ class GPT2LMREModel(GPT2PreTrainedModel):
 
     def forward(self, e1_ids, e2_ids, e1_mask, e2_mask, e1_labels=None, e2_labels=None, input_ids=None,
                 attention_mask=None, labels=None):
+
         transformer_outputs = self.transformer(e1_ids=e1_ids, e2_ids=e2_ids, e1_mask=e1_mask, e2_mask=e2_mask,
                                                input_ids=input_ids, attn_mask=attention_mask)
         hidden_states = transformer_outputs[0]
@@ -188,13 +202,19 @@ class GPT2LMREModel(GPT2PreTrainedModel):
 
         outputs = (lm_logits,) + transformer_outputs[1:]
         if labels is not None and e1_labels is not None and e2_labels is not None:
+            ignore_index = -100
+            labs = []
+            for i in range(e1_labels.shape[0]):
+                e1_lab, e2_lab, in_lab = e1_labels[i], e2_labels[i], labels[i]
+                e1_lab, e2_lab, in_lab = e1_lab[e1_lab > -1], e2_lab[e2_lab > -1], in_lab[in_lab > -1]
+                labs.append(torch.cat((e1_lab, e2_lab, in_lab)))
+            labels = cat_tensors(labs, padding=ignore_index)
             # Shift so that tokens < n predict n
             # print(e1_labels.shape, e2_labels.shape, labels.shape)
-            labels = torch.cat((e1_labels, e2_labels, labels), dim=-1)
             shift_logits = lm_logits[..., :-1, :].contiguous()
             shift_labels = labels[..., 1:].contiguous()
             # Flatten the tokens
-            loss_fct = CrossEntropyLoss(ignore_index=-1)
+            loss_fct = CrossEntropyLoss(ignore_index=ignore_index)
             loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
             outputs = (loss,) + outputs
 

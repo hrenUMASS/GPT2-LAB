@@ -61,6 +61,16 @@ def get_tensor_batch(batch):
     return torch.stack(batch), labels, attn_mask
 
 
+def cat_tensors(tensor_list, padding=0):
+    result = list(tensor_list)
+    max_len = max(result, key=lambda x: x.shape[-1]).shape[-1]
+    dtype = result[0].dtype
+    for i in range(len(result)):
+        e = result[i]
+        result[i] = torch.cat((e, torch.zeros(max_len - e.shape[-1], dtype=dtype) + padding))
+    return torch.stack(result)
+
+
 def get_re_data(data, max_len=np.inf):
     # print(data[0])
     empty = torch.zeros(0, dtype=torch.long)
@@ -68,18 +78,20 @@ def get_re_data(data, max_len=np.inf):
     e1_data, e2_data = [], []
     sent_data = []
     for x in data:
-        if x[0].shape[0] < 1 or x[1].shape[0] < 1:
-            sent_data.append(empty)
-            e1_data.append(empty)
-            e2_data.append(empty)
-            continue
         if len(data[0]) > 2:
             sent = x[2]
             # print('Testing entities in sentence')
             # print(x[0], x[1], x[2].shape)
+            failed = False
             if not (in_tensor(sent, x[0]) and in_tensor(sent, x[1])):
                 print('Entity not in sentence\ne1={}\ne2={}\nsent={}\nidx={}'.format(x[0], x[1], sent, x[3]))
-            # print('All entities in sentence', x[0], x[1], x[2])
+                failed = True
+            failed |= (x[0].shape[0] < 1 or x[1].shape[0] < 1)
+            if failed:
+                sent_data.append(empty)
+                e1_data.append(empty)
+                e2_data.append(empty)
+                continue
             adj_max_len = max_len - x[0].shape[0] - x[1].shape[0]
             if sent.shape[0] > adj_max_len:
                 ei = max(get_index(sent, x[0]) + x[0].shape[0], get_index(sent, x[1]) + x[1].shape[0])
@@ -94,6 +106,7 @@ def get_re_data(data, max_len=np.inf):
             sent_data.append(sent)
         e1_data.append(x[0])
         e2_data.append(x[1])
+
     e1b, e1l, e1m = get_tensor_batch(e1_data)
     e2b, e2l, e2m = get_tensor_batch(e2_data)
     result = {'e1_ids': e1b, 'e1_mask': e1m, 'e1_labels': e1l, 'e2_ids': e2b, 'e2_mask': e2m, 'e2_labels': e2l}
@@ -113,5 +126,5 @@ def get_model_output(model, data):
         return output[0].mean()
     except Exception:
         print('data: ', data)
-        print([x.device for x in data])
+        print([x.device for x in data.values()])
         exit()
