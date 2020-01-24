@@ -1,28 +1,24 @@
 import argparse
 import json
-import logging
-import os
 
 import GPUtil
-import torch
+# import torch
 import transformers as tfm
-from torch import nn
 
 from dataset import TextDataset, IdxDataset
 from gpt2_eval import evaluate_re, evaluate_normal
 from gpt2_modified import GPT2LMREModel
 from gpt2_train import train_normal, train_re
-from loggers import get_logger, log_info, cuda_mem_in_mb
+from loggers import *
+from util import get_module_from_parallel
+
+# import logging
+# import os
+# from torch import nn
 
 logging.getLogger('transformers.tokenization_utils').disabled = True
 
 device = torch.device('cuda:0')
-
-
-def get_module_from_parallel(module):
-    if isinstance(module, nn.DataParallel):
-        return get_module_from_parallel(module.module)
-    return module
 
 
 def single_train(config):
@@ -34,23 +30,13 @@ def single_train(config):
     save_path = config.get('save_path', None)
     save_model = config.get('save_model', False)
 
-    prepare_logger, train_logger, validation_logger = None, None, None
-    final_logger, cuda_logger, loss_logger = None, None, None
-
     if save_path is not None:
-        if not os.path.exists(save_path):
-            os.mkdir(save_path)
-        log_path = list(os.path.split(config['save_path']))
+        log_path = list(os.path.split(save_path))
         log_path.append('log/')
         log_path = '/'.join(log_path)
-        if not os.path.exists(log_path):
-            os.mkdir(log_path)
-        prepare_logger = get_logger('gpt2 prepare logger', log_path + 'pre.log')
-        train_logger = get_logger('gpt2 train logger', log_path + 'train.log')
-        validation_logger = get_logger('gpt2 validation logger', log_path + 'val.log')
-        final_logger = get_logger('gpt2 final logger', log_path + 'fin.log')
-        cuda_logger = get_logger('cuda logger', log_path + 'cuda.log')
-        loss_logger = get_logger('loss logger', log_path + 'los.log')
+        if not os.path.exists(save_path):
+            os.mkdir(save_path)
+        initial_loggers(log_path)
 
     json_encoder = json.JSONEncoder(ensure_ascii=False, indent=2)
     log_info(prepare_logger, 'config loaded:\n' + json_encoder.encode(config))
@@ -95,11 +81,11 @@ def single_train(config):
         log_info(cuda_logger, 'GPU Free {} Used {} Total {}'.format(gpu.memoryFree, gpu.memoryUsed, gpu.memoryTotal))
         new_model, train_losses = train_re(model, idx_dataset, batch_size, epochs,
                                            epoch_iter, learning_rate=learning_rate, weight_decay=weight_decay,
-                                           loggers=(cuda_logger, train_logger, loss_logger), n_gpus=n_gpus,
-                                           max_len=max_len)
+                                           n_gpus=n_gpus, max_len=max_len, save_path=save_path if save_model else None,
+                                           tokenizer=tokenizer)
         idx_dataset.change_mode()
         perplexity, perplexities, eval_losses = evaluate_re(new_model, idx_dataset, batch_size, epochs, epoch_iter,
-                                                            logger=validation_logger, n_gpus=n_gpus, max_len=max_len)
+                                                            n_gpus=n_gpus, max_len=max_len)
         idx_file.close()
         ent_file.close()
         sent_file.close()
@@ -109,10 +95,9 @@ def single_train(config):
         data = TextDataset(data_path, tokenizer, epoch_iter * batch_size, max_len=max_len,
                            valid_func=lambda x: x.shape[0] > 2, truncate_mode=truncate_mode)
         new_model, train_losses = train_normal(model, data, batch_size, epochs, epoch_iter, learning_rate=learning_rate,
-                                               weight_decay=weight_decay,
-                                               loggers=(cuda_logger, train_logger, loss_logger), n_gpus=n_gpus)
+                                               weight_decay=weight_decay, n_gpus=n_gpus)
         perplexity, perplexities, eval_losses = evaluate_normal(new_model, data, batch_size, epochs, epoch_iter,
-                                                                logger=validation_logger, n_gpus=n_gpus)
+                                                                n_gpus=n_gpus)
 
     if save_path is not None:
         if save_model:

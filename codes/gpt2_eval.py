@@ -1,12 +1,11 @@
 import numpy as np
-import torch
+# import torch
 import torch.nn.functional as F
 import tqdm
 from torch.utils.data import DataLoader
 
-from gpt2_train import get_tensor_batch, get_re_data
-from loggers import log_info
-from util import get_model_output
+from codes.loggers import *
+from codes.util import get_model_output, process_re_data, get_re_data, get_tensor_batch
 
 
 def top_k_top_p_filtering(logits, top_k=0, top_p=0.0, filter_value=-float('Inf')):
@@ -67,7 +66,7 @@ def sample_sequence(model, length, context, num_samples=1, temperature=1, top_k=
     return generated
 
 
-def evaluate_normal(model, dataset, batch_size, epochs, epoch_iter, logger=None, n_gpus=1, device=None):
+def evaluate_normal(model, dataset, batch_size, epochs, epoch_iter, n_gpus=1, device=None):
     eval_loss, eval_steps = 0, 0
     losses, perplexities = [], []
     data_loader = DataLoader(dataset, shuffle=False, batch_size=batch_size, collate_fn=lambda x: x)
@@ -89,14 +88,14 @@ def evaluate_normal(model, dataset, batch_size, epochs, epoch_iter, logger=None,
                 eval_steps += 1
                 perplex_value = torch.exp(torch.tensor(eval_loss / eval_steps)).item()
                 perplexities.append(perplex_value)
-                log_info(logger,
+                log_info(validation_logger,
                          'Loss {}, perplexity {}'.format(loss_value, perplex_value))
                 losses.append(loss_value)
             step += 1
             if step >= epoch_iter:
                 break
-        log_info(logger, '----------------------------------------------------')
-        log_info(logger,
+        log_info(validation_logger, '----------------------------------------------------')
+        log_info(validation_logger,
                  'Epoch {}, Mean Loss {}, Min Loss {}, Accum Loss {}'.format(e, np.mean(losses[e:e + epoch_iter]),
                                                                              np.min(losses[e: e + epoch_iter]),
                                                                              eval_loss / eval_steps))
@@ -105,7 +104,7 @@ def evaluate_normal(model, dataset, batch_size, epochs, epoch_iter, logger=None,
     return perplexity, torch.tensor(perplexities), torch.tensor(losses)
 
 
-def evaluate_re(model, idx, batch_size, epochs, epoch_iter, logger=None, n_gpus=1, device=None, max_len=512):
+def evaluate_re(model, idx, batch_size, epochs, epoch_iter, n_gpus=1, device=None, max_len=512):
     eval_loss, eval_steps = 0, 0
     losses, perplexities = [], []
     data_loader = DataLoader(idx, batch_size=batch_size, collate_fn=lambda x: x)
@@ -119,7 +118,8 @@ def evaluate_re(model, idx, batch_size, epochs, epoch_iter, logger=None, n_gpus=
         # sent_i = 0
         # stored_sent = sents.readline()
         for step, raw in enumerate(data_loader):
-            data = get_re_data(raw, max_len=max_len)
+            data = get_re_data(raw, max_len=max_len, train=False)
+            data = process_re_data(data)
             # print(list(map(lambda x: x.shape, data)))
             with torch.no_grad():
                 loss = get_model_output(model, data)
@@ -128,11 +128,11 @@ def evaluate_re(model, idx, batch_size, epochs, epoch_iter, logger=None, n_gpus=
                 eval_steps += 1
                 perplex_value = torch.exp(torch.tensor(eval_loss / eval_steps)).item()
                 perplexities.append(perplex_value)
-                log_info(logger, 'Loss {}, perplexity {}'.format(loss_value, perplex_value))
+                log_info(validation_logger, 'Loss {}, perplexity {}'.format(loss_value, perplex_value))
                 losses.append(loss_value)
         loss_seg = losses[e * epoch_iter:]
-        log_info(logger, '----------------------------------------------------')
-        log_info(logger,
+        log_info(validation_logger, '----------------------------------------------------')
+        log_info(validation_logger,
                  'Epoch {}, Mean Loss {}, Min Loss {}, Accum Loss {}'.format(e, np.mean(loss_seg), np.min(loss_seg),
                                                                              eval_loss / eval_steps))
     eval_loss /= eval_steps

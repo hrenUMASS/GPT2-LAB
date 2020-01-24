@@ -6,7 +6,8 @@ from torch.nn import CrossEntropyLoss
 from transformers import GPT2PreTrainedModel
 from transformers.modeling_gpt2 import Block
 
-from util import cat_tensors
+
+# from util import cat_tensors
 
 
 # import transformers as tfm
@@ -60,72 +61,39 @@ class GPT2REModel(GPT2PreTrainedModel):
         for layer, heads in heads_to_prune.items():
             self.h[layer].attn.prune_heads(heads)
 
-    def forward(self, e1_ids, e2_ids, e1_mask, e2_mask, input_ids=None,
-                attn_mask=None):
+    def forward(self, input_ids, attention_mask, position_ids, token_type_ids):
 
-        device = e1_ids.device
-        e1_shape = e1_ids.size()
-        e2_shape = e2_ids.size()
-        input_shape = torch.Size([e1_shape[0], 0])
-        # print(e1_shape, e2_shape, input_ids.shape)
-        e1_type = torch.zeros(e1_shape, dtype=torch.long, device=device)
-        e2_type = torch.ones(e2_shape, dtype=torch.long, device=device)
-        token_type_ids = torch.cat((e1_type, e2_type), dim=-1)
+        device = input_ids.device
 
-        if input_ids is not None:
-            input_shape = input_ids.size()
-            input_type = 2 * torch.ones(input_shape, dtype=torch.long, device=device)
-            token_type_ids = torch.cat((token_type_ids, input_type), dim=-1)
+        inputs_embeds = torch.zeros(*input_ids.shape, self.wte.embedding_dim, dtype=self.wte.weight.dtype,
+                                    device=device)
+        position_embeds = torch.zeros(*inputs_embeds.shape, dtype=self.wpe.weight.dtype, device=device)
+        token_type_embeds = self.wte(token_type_ids)
 
-        token_type_ids = token_type_ids.view(-1, input_shape[-1] + e1_shape[-1] + e2_shape[-1])
+        for i in range(input_ids.shape[0]):
+            inp = input_ids[i]
+            pos = position_ids[i]
+            type_id = token_type_ids[i]
+            e1, e2 = inp[type_id == 0], inp[type_id == 1]
+            ep1, ep2 = pos[type_id == 0], pos[type_id == 1]
+            e1e, e2e = self.wte(e1), self.wte(e2)
+            e1p, e2p = self.wpe(ep1), self.wpe(ep2)
+            embd = self.ent(torch.cat((e1e, e2e)))
+            pos_embd = self.pos(torch.cat((e1p, e2p)))
+            if 2 in type_id:
+                embd = torch.cat((embd, self.wte(inp[type_id == 2])))
+                pos_embd = torch.cat((pos_embd, self.wpe(pos[type_id == 2])))
+            inputs_embeds[i] = embd
+            position_embeds[i] = pos_embd
 
-        if input_ids is not None:
-            input_ids = input_ids.view(-1, input_shape[-1])
-
-        e1_ids = e1_ids.view(-1, e1_shape[-1])
-        e2_ids = e2_ids.view(-1, e2_shape[-1])
-
-        def pos_id(length):
-            return torch.arange(0, length, dtype=torch.long, device=device).unsqueeze(0).view(-1, length)
-
-        input_embeds = []
-        pos_embeds = []
-        attns = []
-        token_embeds = []
-        for i in range(e1_ids.shape[0]):
-            e1_attn, e2_attn = e1_mask[i], e2_mask[i]
-            e1, e2 = e1_ids[i], e2_ids[i]
-            e1, e2 = e1[e1 * (e1_attn - 0.5) > 0], e2[e2 * (e2_attn - 0.5) > 0]
-            attn = torch.cat((e1_attn, e2_attn))
-            input_embed = self.ent(torch.cat((self.wte(e1), self.wte(e2))))
-            pos_embed = self.pos(torch.cat((self.wpe(pos_id(e1.shape[0])), self.wpe(pos_id(e2.shape[0])))))
-            token_type_id = torch.cat((torch.zeros(e1.shape[0]), torch.ones(e2.shape[0])))
-            if input_ids is not None:
-                in_attn = attn_mask[i]
-                in_ids = input_ids[i]
-                in_ids = in_ids[in_ids * (in_attn - 0.5) > 0]
-                attn = torch.cat((attn, in_attn))
-                input_embed = torch.cat((input_embed, self.wte(in_ids)))
-                pos_embed = torch.cat((pos_embed, self.wpe(pos_id(in_ids.shape[0]))))
-                token_type_id = torch.cat((token_type_id, 2 * torch.ones(in_ids.shape[0])))
-            input_embeds.append(input_embed)
-            pos_embeds.append(pos_embed)
-            attns.append(attn)
-            token_embeds.append(self.wte(token_type_id))
-
-        inputs_embeds = cat_tensors(input_embeds, padding=50256)
-        position_embeds = cat_tensors(pos_embeds)
-        token_type_embeds = cat_tensors(token_embeds, padding=2)
-        attention_mask = cat_tensors(attns)
-
-        attention_mask = attention_mask.view(-1, input_shape[-1] + e1_shape[-1] + e2_shape[-1])
+        # print(inputs_embeds.shape, position_embeds.shape, token_type_embeds.shape, attention_mask.shape)
+        attention_mask = attention_mask.view(-1, input_ids.shape[-1])
         attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
 
         attention_mask = attention_mask.to(dtype=next(self.parameters()).dtype)  # fp16 compatibility
         attention_mask = (attention_mask - 1.0) * 10000.0
 
         # print(e1_mask.shape, e2_mask.shape, attention_mask.shape)
-
         hidden_states = inputs_embeds + position_embeds + token_type_embeds
         hidden_states = self.drop(hidden_states)
 
@@ -191,24 +159,18 @@ class GPT2LMREModel(GPT2PreTrainedModel):
         inputs.update(kwargs)
         return inputs
 
-    def forward(self, e1_ids, e2_ids, e1_mask, e2_mask, e1_labels=None, e2_labels=None, input_ids=None,
-                attention_mask=None, labels=None):
+    def forward(self, input_ids, attention_mask=None, position_ids=None, token_type_ids=None, labels=None):
 
-        transformer_outputs = self.transformer(e1_ids=e1_ids, e2_ids=e2_ids, e1_mask=e1_mask, e2_mask=e2_mask,
-                                               input_ids=input_ids, attn_mask=attention_mask)
+        transformer_outputs = self.transformer(input_ids=input_ids, attention_mask=attention_mask,
+                                               position_ids=position_ids, token_type_ids=token_type_ids)
         hidden_states = transformer_outputs[0]
 
         lm_logits = self.lm_head(hidden_states)
 
         outputs = (lm_logits,) + transformer_outputs[1:]
-        if labels is not None and e1_labels is not None and e2_labels is not None:
+        if labels is not None:
             ignore_index = -100
-            labs = []
-            for i in range(e1_labels.shape[0]):
-                e1_lab, e2_lab, in_lab = e1_labels[i], e2_labels[i], labels[i]
-                e1_lab, e2_lab, in_lab = e1_lab[e1_lab > -1], e2_lab[e2_lab > -1], in_lab[in_lab > -1]
-                labs.append(torch.cat((e1_lab, e2_lab, in_lab)))
-            labels = cat_tensors(labs, padding=ignore_index)
+
             # Shift so that tokens < n predict n
             # print(e1_labels.shape, e2_labels.shape, labels.shape)
             shift_logits = lm_logits[..., :-1, :].contiguous()

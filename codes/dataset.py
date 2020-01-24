@@ -2,7 +2,7 @@ import numpy as np
 import transformers as tfm
 from torch.utils.data import Dataset
 
-from util import encode
+from codes.util import encode
 
 
 def _read_block(fp, total_len, tokenizer: tfm.PreTrainedTokenizer, max_len=None, valid_func=lambda x: True,
