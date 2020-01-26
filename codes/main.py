@@ -7,7 +7,7 @@ import GPUtil
 import torch
 import transformers as tfm
 
-from libs import TextDataset, IdxDataset, GPT2LMREModel
+from libs import IdxDataset, GPT2LMREModel, IdxTextDataset, IdxFullDataset
 from libs import evaluate, train
 from libs import get_module_from_parallel, get_re_data, get_tensor_batch, process_re_data
 from libs import log_info, initial_loggers, cuda_mem_in_mb
@@ -57,7 +57,12 @@ def single_train(config):
     model_select = config.get('model_select', 0)
     continue_train = config.get('continue', False)
     from_checkpoint = config.get('from_checkpoint', continue_train)
-    eval_size = config.get('eval_size', min(batch_size * epoch_iter // 2, 1000))
+    eval_size = config.get('eval_size', min(epoch_iter // 2, 1000))
+
+    lab_ent_data = lab_data_path + 'wiki2016_nchunk_entity_agg/'
+    ent_path = config.get('ent_path', lab_ent_data + 'wiki2016_ent')
+    sent_path = config.get('sent_path', '/iesl/canvas/hren/gpt2_wiki_lab/data/wiki2016_sents_mapped')
+    idx_path = config.get('idx_path', lab_ent_data + 'wiki2016_idx')
 
     log_info(cuda_logger, 'avaliable cudas {}'.format(torch.cuda.device_count()))
     log_info(prepare_logger, 'start training:\n\tepochs: {}\n\tepoch_iter: {}\n\tbatch_size: {}'.format(
@@ -67,38 +72,37 @@ def single_train(config):
     log_info(cuda_logger, 'Start cuda memory {}'.format(cuda_mem_in_mb()))
     log_info(cuda_logger, 'Allocated model {}'.format(cuda_mem_in_mb()))
 
-    if 'idx_path' in config:
-        lab_ent_data = lab_data_path + 'wiki2016_nchunk_entity_agg/'
-        ent_path = config.get('ent_path', lab_ent_data + 'wiki2016_ent')
-        sent_path = config.get('sent_path', '/iesl/canvas/hren/gpt2_wiki_lab/data/wiki2016_sents_mapped')
-        idx_path = config.get('idx_path', lab_ent_data + 'wiki2016_idx')
+    if model_select == 1:
         idx_file = open(idx_path, 'r')
         ent_file = open(ent_path, 'r')
         sent_file = open(sent_path, 'r')
-        dataset = IdxDataset(tokenizer, idx_file, ent_file, sent_file, epoch_iter * batch_size, eval_size=eval_size)
+        dataset = IdxFullDataset(tokenizer, idx_file=idx_file, ent_file=ent_file, sent_file=sent_file,
+                                 total_len=epoch_iter * batch_size, eval_size=eval_size * batch_size)
         idx_file.close()
         ent_file.close()
         sent_file.close()
         data_func = lambda x: process_re_data(get_re_data(x, max_len=max_len))
-        ent_i, sent_i = dataset.get_total_ent_sent()
-        log_info(prepare_logger, 'Load entities {}, sentences {}'.format(ent_i, sent_i))
-        log_info(cuda_logger, "Allocated data {}".format(cuda_mem_in_mb()))
-        log_info(cuda_logger, 'GPU Free {} Used {} Total {}'.format(gpu.memoryFree, gpu.memoryUsed, gpu.memoryTotal))
+        log_info(prepare_logger, 'Load idxes {} entities {}, sentences {}'.format(*dataset.get_loaded_length()))
+
     else:
-        dataset = TextDataset(data_path, tokenizer, epoch_iter * batch_size, max_len=max_len,
-                              valid_func=lambda x: x.shape[0] > 2, truncate_mode=truncate_mode, eval_size=eval_size)
-        sent_i = len(dataset)
-        log_info(prepare_logger, 'Load sentences {}'.format(sent_i))
-        log_info(cuda_logger, "Allocated data {}".format(cuda_mem_in_mb()))
-        log_info(cuda_logger, 'GPU Free {} Used {} Total {}'.format(gpu.memoryFree, gpu.memoryUsed, gpu.memoryTotal))
+        idx_file = open(idx_path, 'r')
+        sent_file = open(sent_path, 'r')
+        dataset = IdxTextDataset(tokenizer, idx_file=idx_file, sent_file=sent_file, total_len=epoch_iter * batch_size,
+                                 eval_size=eval_size * batch_size)
+        idx_file.close()
+        sent_file.close()
 
         def data_func(x):
-            batch, labels, attn_mask = get_tensor_batch(x)
+            batch, labels, attn_mask = get_tensor_batch(x[0])
             return {'input_ids': batch, 'labels': labels, 'attention_mask': attn_mask}
 
-    if model_select == 1:
+        log_info(prepare_logger, 'Load idxs {} sentences {}'.format(*dataset.get_loaded_length()))
+    log_info(cuda_logger, "Allocated data {}".format(cuda_mem_in_mb()))
+    log_info(cuda_logger, 'GPU Free {} Used {} Total {}'.format(gpu.memoryFree, gpu.memoryUsed, gpu.memoryTotal))
+
+    if model_select in (1, 2):
         if not isinstance(dataset, IdxDataset):
-            log_info(prepare_logger, 'Not IdxDataset! Relation Model must use the IdxDataset!')
+            log_info(prepare_logger, 'Not IdxDataset!')
             exit()
         log_info(prepare_logger, 'Selected GPT2RE')
         model = GPT2LMREModel.from_pretrained(load_path)

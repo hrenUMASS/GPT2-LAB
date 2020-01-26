@@ -138,10 +138,8 @@ def process_re_data(data):
             'labels': labels}
 
 
-def get_re_data(data, max_len=np.inf, train=True):
-    # print(data[0])
+def get_re_data(data, max_len=np.inf, train=True, batch_size=32):
     empty = torch.zeros(0, dtype=torch.long)
-    # sent_data = [x[2] for x in data]
     e1_data, e2_data = [], []
     sent_data = []
     for x in data:
@@ -173,14 +171,14 @@ def get_re_data(data, max_len=np.inf, train=True):
             sent_data.append(sent)
         e1_data.append(x[0])
         e2_data.append(x[1])
-
-    # e1b, e1l, e1m = get_tensor_batch(e1_data)
-    # e2b, e2l, e2m = get_tensor_batch(e2_data)
-    # result = {'e1_ids': e1b, 'e1_mask': e1m, 'e1_labels': e1l, 'e2_ids': e2b, 'e2_mask': e2m, 'e2_labels': e2l}
+    data_len = len(e1_data)
+    rm_len = batch_size - data_len
+    if rm_len > 0:
+        e1_data.extend([empty] * rm_len)
+        e2_data.extend([empty] * rm_len)
+        sent_data.extend([empty] * rm_len)
     result = {'e1': e1_data, 'e2': e2_data}
-    if len(sent_data) > 0:
-        # batch, labels, attn_mask = get_tensor_batch(sent_data)
-        # result.update({'input_ids': batch, 'attention_mask': attn_mask, 'labels': labels})
+    if len(sent_data) == len(e1_data):
         result.update({'input': sent_data})
     return result
 

@@ -30,9 +30,11 @@ def train(model, dataset, batch_size, epochs, epoch_iter, learning_rate=1e-2, we
                                                     num_training_steps=epochs * epoch_iter)
     losses = []
     # gpu = GPUtil.getGPUs()[0]
-    n = max(len(dataset) // 9000, 1)
-    data_loaders = [DataLoader(i, shuffle=False, batch_size=batch_size, collate_fn=lambda x: x) for i in
-                    dataset.split(n)]
+    # n = max(len(dataset) // 9000, 1)
+    n = 5
+    datasets = dataset.split(n)
+    data_loaders = [DataLoader(i, shuffle=False, batch_size=batch_size, collate_fn=lambda x: x) for i in datasets]
+    print([k.get_loaded_length() for k in datasets])
     mini_epoch = 0
     if from_checkpoint:
         epoch, mini_epoch, model_state, optimizer_state, scheduler_state, loss = load_checkpoint(
