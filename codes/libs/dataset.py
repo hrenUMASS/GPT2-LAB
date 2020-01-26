@@ -128,18 +128,15 @@ class IdxDataset(DatasetWithEval):
         return e1, e2, sent, idx
 
     def _read_block(self):
-        ents = np.sort(np.unique(self.data[:, [0, 1]]))
-        sents = np.sort(np.unique(self.data[:, 2]))
-        idx = 0
+        ents = set(self.data[:, [0, 1]].view(1, -1).sequeeze())
+        sents = set(self.data[:, 2])
         for i in range(np.max(ents) + 1):
             ent = self.ent_file.readline()[:-1]
-            if ents[idx] == i:
+            if i in ents:
                 self.ent_data[i] = ent
-                idx += 1
-        idx = 0
         for i in range(np.max(sents) + 1):
             sent = self.sent_file.readline()[:-1]
-            if sents[idx] == i:
+            if i in sents:
                 self.sent_data[i] = encode(self.tokenizer, sent, add_eos=True, add_prefix_space=True)
 
     def get_total_ent_sent(self):
