@@ -1,11 +1,12 @@
+import time
 import traceback
 from typing import Sequence
 
 import numpy as np
-import torch
 from torch import nn
 
 from codes.global_constants import *
+from codes.loggers import *
 
 
 def get_index(ori, cmp):
@@ -198,3 +199,70 @@ def get_model_output(model, data):
         print([x.device for x in data.values()])
         print(traceback.print_exc())
         exit()
+
+
+def train_one_epoch(dataloader, model, optimizer, scheduler, data_process_func):
+    losses = []
+    for step, raw in enumerate(dataloader):
+        step_time = time.time()
+        data = data_process_func(raw)
+        log_info(cuda_logger,
+                 'Allocated batches {}, {}'.format(cuda_mem_in_mb(), {k: v.shape for k, v in data.items()}))
+        loss = get_model_output(model, data)
+
+        loss_value = loss.item()
+        # if len(losses) > 0 and abs(loss_value - losses[-1]) > 0.5:
+        #     log_info(loggers[2], 'Huge Loss Change Detected {}\n{}'.format(loss_value - losses[-1], raw))
+        # continue
+        loss.backward()
+        nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        optimizer.step()
+        scheduler.step()
+        model.zero_grad()
+        losses.append(loss_value)
+        log_info(train_logger, '{} Iter Loss {} Time {}'.format(step, loss_value, time.time() - step_time))
+    return losses, loss
+
+
+def eval_one_epoch(dataloader, model, eval_loss, eval_steps, data_process_func):
+    losses, perplexities = [], []
+    for step, raw in enumerate(dataloader):
+        step_time = time.time()
+        data = data_process_func(raw)
+        log_info(cuda_logger,
+                 'Allocated batches {}, {}'.format(cuda_mem_in_mb(), {k: v.shape for k, v in data.items()}))
+        with torch.no_grad():
+            loss = get_model_output(model, data)
+            loss_value = loss.item()
+            eval_loss += loss_value
+            eval_steps += 1
+            perplex_value = torch.exp(torch.tensor(eval_loss / eval_steps)).item()
+            perplexities.append(perplex_value)
+        losses.append(loss_value)
+        log_info(train_logger, '{} Iter Loss {} Perplexity {} Time {}'.format(step, loss_value, perplex_value,
+                                                                              time.time() - step_time))
+    return losses, perplexities, eval_loss, eval_steps
+
+
+def save_checkpoint(save_path, model, epoch, mini_epoch, optimizer, scheduler, loss):
+    check_point = {'epoch': epoch, 'mini_epoch': mini_epoch, 'model_state': model.state_dict(),
+                   'optimizer_state': optimizer.state_dict(), 'scheduler_state': scheduler.state_dict(), 'loss': loss}
+    torch.save(check_point, save_path)
+
+
+def load_checkpoint(save_path, model_cls=None, optim_cls=None, sche_cls=None, model_param=None, optim_param=None,
+                    sche_param=None):
+    check_point = torch.load(save_path)
+    model = check_point['model_state']
+    optimizer = check_point['optimizer_state']
+    scheduler = check_point['scheduler_state']
+    loss = check_point['loss']
+    epoch = check_point['epoch']
+    mini_epoch = check_point['mini_epoch']
+    if model_cls is not None:
+        model = model_cls(**(model_param or {})).load_state_dict(model)
+    if optim_cls is not None:
+        optimizer = optim_cls(**(optim_param or {})).load_state_dict(optimizer)
+    if sche_cls is not None:
+        scheduler = sche_cls(**(sche_param or {})).load_state_dict(scheduler)
+    return epoch, mini_epoch, model, optimizer, scheduler, loss

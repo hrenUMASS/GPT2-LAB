@@ -47,110 +47,100 @@ def get_tokens(tokenizer, ent):
            tokenizer.encode(ent, return_tensors='pt')[0]
 
 
-class BlockTextDataset(Dataset):
-
-    def __init__(self, file_path, tokenizer, total_len, block_size=512, valid_func=lambda x: True,
-                 process_func=lambda x: x, max_len=None, truncate_mode='truncate'):
-        self.valid_func = valid_func
-        self.process_func = process_func
-        self.block_size = block_size
-        self.take_count = 1
+class DatasetWithEval(Dataset):
+    def __init__(self, tokenizer, total_len, eval_size=0):
+        self.tokenizer = tokenizer
         self.total_len = total_len
-        self.tokenizer = tokenizer
-        self.max_len = max_len
-        self.truncate_mode = truncate_mode
-        self.file = open(file_path, 'r')
-        self.data = _read_block(self.file, self.block_size, self.tokenizer, max_len=self.max_len,
-                                valid_func=self.valid_func, process_func=self.process_func,
-                                truncate_mode=self.truncate_mode)
-
-    def __len__(self):
-        return self.total_len
-
-    def __getitem__(self, item):
-        result = self.data[item % self.block_size]
-        self.take_count += 1
-        if self.take_count > self.block_size:
-            self.take_count = 1
-            self.data = _read_block(self.file, self.block_size, self.tokenizer, max_len=self.max_len,
-                                    valid_func=self.valid_func, process_func=self.process_func,
-                                    truncate_mode=self.truncate_mode)
-        return result
-
-
-class TextDataset(Dataset):
-
-    def __init__(self, fp, tokenizer, total_len, valid_func=lambda x: True,
-                 process_func=lambda x: x, max_len=None, truncate_mode='truncate', add_eos=False):
-        if isinstance(fp, str):
-            fp = open(fp, 'r')
-        self.data = _read_block(fp, total_len, tokenizer, max_len=max_len, valid_func=valid_func,
-                                process_func=process_func, truncate_mode=truncate_mode, add_eos=add_eos)
-        # self.data = np.array(self.data, dtype=np.long)
-
-    def __len__(self):
-        return len(self.data)
-
-    def __getitem__(self, item):
-        return self.data[item]
-
-
-class IdxDataset(Dataset):
-
-    def __init__(self, tokenizer, idx_file, ent_file, sent_file, total_len):
-        self.idx_file = idx_file
-        self.ent_file = ent_file
-        self.sent_file = sent_file
-        self.idx_data = []
-        i = 0
-        line = idx_file.readline()
-        while line and i < total_len * 2:
-            self.idx_data.append(tuple(map(lambda x: int(x), line.split())))
-            line = idx_file.readline()
-            i += 1
-        self.idx_data = np.array(self.idx_data)
-        self.sent_data = []
-        self.ent_data = []
-        self.tokenizer = tokenizer
         self.eval = False
-        self.total_len = total_len
-        # self.space_encoder = IdxDataset._generate_space_vocab(tokenizer.encoder)
-        # self.space_decoder = {v: k for k, v in self.space_encoder.items()}
+        self.eval_size = eval_size
+        self.data = []
 
-        self._read_block()
+    def change_mode(self, evaluate=True):
+        self.eval = evaluate
+        return self
 
     def __len__(self):
+        if self.eval:
+            return self.eval_size
         return self.total_len
 
     def __getitem__(self, item):
         if self.eval:
             item += self.total_len
-        idx = self.idx_data[item]
-        # print('idx', idx, item, idx[0] - self.enti, idx[1] - self.enti, idx[2] - self.senti)
+        return self.data[item]
+
+    def split(self, partitions, eval_size=0):
+        n = partitions
+        l = len(self.data)
+        param = dict(vars(self))
+        param['eval_size'] = self.eval_size
+        result = []
+        for i in range(n):
+            temp_data = self.data[i:l:n]
+            param.update({'data': temp_data})
+            result.append(type(self)(**param))
+
+
+class TextDataset(DatasetWithEval):
+
+    def __init__(self, fp, tokenizer, total_len, valid_func=lambda x: True,
+                 process_func=lambda x: x, max_len=None, truncate_mode='truncate', eval_size=512):
+        super(TextDataset, self).__init__(tokenizer, total_len, eval_size=eval_size)
+        if isinstance(fp, str):
+            fp = open(fp, 'r')
+        data_len = total_len + eval_size
+        self.data = _read_block(fp, data_len, tokenizer, max_len=max_len, valid_func=valid_func,
+                                process_func=process_func, truncate_mode=truncate_mode, add_eos=True)
+
+
+class IdxDataset(DatasetWithEval):
+
+    def __init__(self, tokenizer, idx_file=None, ent_file=None, sent_file=None, total_len=512, data=None,
+                 eval_size=512):
+        super(IdxDataset, self).__init__(tokenizer, total_len, eval_size=eval_size)
+        if None not in (idx_file, ent_file, sent_file):
+            self.idx_file = idx_file
+            self.ent_file = ent_file
+            self.sent_file = sent_file
+            i = 0
+            line = idx_file.readline()
+            data_len = total_len + eval_size
+            while line and i < data_len:
+                self.data.append(tuple(map(lambda x: int(x), line.split())))
+                line = idx_file.readline()
+                i += 1
+            self.data = np.array(self.data)
+            self.sent_data = {}
+            self.ent_data = {}
+            self._read_block()
+        else:
+            self.ent_data = data['ent']
+            self.sent_data = data['sent']
+            self.data = data['idx']
+            data_len = len(self.data)
+            self.total_len = data_len - eval_size
+
+    def __getitem__(self, item):
+        idx = super(IdxDataset, self).__getitem__(item)
         e1i, e2i, senti = idx[0], idx[1], idx[2]
-        # print(e1i, e2i, senti)
-        # print('e1', e1i, idx[0])
-        # print('e2', e2i, idx[1])
-        # print('sent', senti, idx[2])
         e1, e2, sent = self.ent_data[e1i], self.ent_data[e2i], self.sent_data[senti]
         e1, e2 = self.unify_entity(e1, sent), self.unify_entity(e2, sent)
-        # print(e1, e2, sent)
         return e1, e2, sent, idx
 
     def _read_block(self):
-        max_ent = np.max(self.idx_data[:, [0, 1]])
-        max_sent = np.max(self.idx_data[:, 2])
-        # print(np.max(self.idx_data[:, [0, 1]]), self.enti, max_ent)
-        # print(np.max(self.idx_data[:, 2]), self.senti, max_sent)
-        self.ent_data = [self.ent_file.readline()[:-1] for _ in range(max_ent + 1)]
-        # print(self.idx_data)
-        # print(list(enumerate(self.ent_data)))
-        pos = self.sent_file.tell()
-        # print(list(enumerate([self.sent_file.readline()[:-1] for _ in range(max_sent + 1)])))
-        self.sent_file.seek(pos)
-        for _ in range(max_sent + 1):
-            self.sent_data.append(
-                encode(self.tokenizer, self.sent_file.readline()[:-1], add_eos=True, add_prefix_space=True))
+        ents = np.sort(np.unique(self.data[:, [0, 1]]))
+        sents = np.sort(np.unique(self.data[:, 2]))
+        idx = 0
+        for i in range(np.max(ents) + 1):
+            ent = self.ent_file.readline()[:-1]
+            if ents[idx] == i:
+                self.ent_data[i] = ent
+                idx += 1
+        idx = 0
+        for i in range(np.max(sents) + 1):
+            sent = self.sent_file.readline()[:-1]
+            if sents[idx] == i:
+                self.sent_data[i] = encode(self.tokenizer, sent, add_eos=True, add_prefix_space=True)
 
     def get_total_ent_sent(self):
         return len(self.ent_data), len(self.sent_data)
@@ -162,7 +152,6 @@ class IdxDataset(Dataset):
                 temp = sent_tok[k].replace(space, '')
                 tot = (tot + temp) if ent.startswith(tot + temp) else (
                     (tot + space + temp) if ent.startswith(tot + space + temp) else None)
-                # print(temp, tot)
                 if tot is None:
                     return None
                 elif tot == ent:
@@ -181,20 +170,24 @@ class IdxDataset(Dataset):
                     return encode(self.tokenizer, ent_tok)
         return encode(self.tokenizer, ent)
 
-    def change_mode(self, evaluate=True):
-        self.eval = evaluate
-        return self
+    def split(self, partitions, eval_size=0):
+        tok = self.tokenizer
+        n = partitions
+        l = len(self.data)
+        return [IdxDataset(tok, data={'idx': self.data[i:l:n], 'ent': self.ent_data, 'sent': self.sent_data},
+                           eval_size=eval_size) for i in range(n)]
 
 
 if __name__ == '__main__':
-    import transformers as tfm
-    from torch.utils.data import DataLoader
-    from gpt2_train import get_tensor_batch
+    pass
+    # import transformers as tfm
+    # from torch.utils.data import DataLoader
+    # from gpt2_train import get_tensor_batch
 
-    tok = tfm.GPT2Tokenizer.from_pretrained('../gpt2_pretrained')
-    a = TextDataset('../../data/wiki2016_sents', tok, 16, max_len=512)
-    b = DataLoader(a, batch_size=4, collate_fn=lambda x: x)
-    for i in b:
-        # print(i)
-        # print(get_tensor_batch(i))
-        print(get_tensor_batch(i))
+    # tok = tfm.GPT2Tokenizer.from_pretrained('../gpt2_pretrained')
+    # a = TextDataset('../../data/wiki2016_sents', tok, 16, max_len=512)
+    # b = DataLoader(a, batch_size=4, collate_fn=lambda x: x)
+    # for i in b:
+    #     print(i)
+    # print(get_tensor_batch(i))
+    # print(get_tensor_batch(i))

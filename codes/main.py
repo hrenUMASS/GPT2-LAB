@@ -5,12 +5,10 @@ import GPUtil
 # import torch
 import transformers as tfm
 
-from dataset import TextDataset, IdxDataset
-from gpt2_eval import evaluate_re, evaluate_normal
-from gpt2_modified import GPT2LMREModel
-from gpt2_train import train_normal, train_re
 from loggers import *
-from util import get_module_from_parallel
+
+# import logging
+# import os
 
 # import logging
 # import os
@@ -32,6 +30,7 @@ def single_train(config):
 
     if save_path is not None:
         log_path = list(os.path.split(save_path))
+        save_path = '/'.join(log_path) + '/'
         log_path.append('log/')
         log_path = '/'.join(log_path)
         if not os.path.exists(save_path):
@@ -55,6 +54,9 @@ def single_train(config):
     max_len = config.get('max_len', 512)
     truncate_mode = config.get('truncate_mode', 'truncate')
     model_select = config.get('model_select', 0)
+    continue_train = config.get('continue', False)
+    from_checkpoint = config.get('from_checkpoint', continue_train)
+    eval_size = config.get('eval_size', min(batch_size * epoch_iter // 2, 1000))
 
     log_info(cuda_logger, 'avaliable cudas {}'.format(torch.cuda.device_count()))
     log_info(prepare_logger, 'start training:\n\tepochs: {}\n\tepoch_iter: {}\n\tbatch_size: {}'.format(
@@ -63,10 +65,14 @@ def single_train(config):
     log_info(cuda_logger, 'GPU Free {} Used {} Total {}'.format(gpu.memoryFree, gpu.memoryUsed, gpu.memoryTotal))
     log_info(cuda_logger, 'Start cuda memory {}'.format(cuda_mem_in_mb()))
     log_info(cuda_logger, 'Allocated model {}'.format(cuda_mem_in_mb()))
-    if model_select == 1:
-        log_info(prepare_logger, 'Selected GPT2RE')
-        model = GPT2LMREModel.from_pretrained(load_path)
-        model.to(device)
+
+    from dataset import TextDataset, IdxDataset
+    from gpt2_eval import evaluate
+    from gpt2_modified import GPT2LMREModel
+    from gpt2_train import train
+    from util import get_module_from_parallel, get_re_data, get_tensor_batch, process_re_data
+
+    if 'idx_path' in config:
         lab_ent_data = lab_data_path + 'wiki2016_nchunk_entity_agg/'
         ent_path = config.get('ent_path', lab_ent_data + 'wiki2016_ent')
         sent_path = config.get('sent_path', '/iesl/canvas/hren/gpt2_wiki_lab/data/wiki2016_sents_mapped')
@@ -74,30 +80,45 @@ def single_train(config):
         idx_file = open(idx_path, 'r')
         ent_file = open(ent_path, 'r')
         sent_file = open(sent_path, 'r')
-        idx_dataset = IdxDataset(tokenizer, idx_file, ent_file, sent_file, epoch_iter * batch_size)
-        ent_i, sent_i = idx_dataset.get_total_ent_sent()
-        log_info(prepare_logger, 'Load entities {}, sentences {}'.format(ent_i, sent_i))
-        log_info(cuda_logger, "Allocated data {}".format(cuda_mem_in_mb()))
-        log_info(cuda_logger, 'GPU Free {} Used {} Total {}'.format(gpu.memoryFree, gpu.memoryUsed, gpu.memoryTotal))
-        new_model, train_losses = train_re(model, idx_dataset, batch_size, epochs,
-                                           epoch_iter, learning_rate=learning_rate, weight_decay=weight_decay,
-                                           n_gpus=n_gpus, max_len=max_len, save_path=save_path if save_model else None,
-                                           tokenizer=tokenizer)
-        idx_dataset.change_mode()
-        perplexity, perplexities, eval_losses = evaluate_re(new_model, idx_dataset, batch_size, epochs, epoch_iter,
-                                                            n_gpus=n_gpus, max_len=max_len)
+        dataset = IdxDataset(tokenizer, idx_file, ent_file, sent_file, epoch_iter * batch_size, eval_size=eval_size)
         idx_file.close()
         ent_file.close()
         sent_file.close()
+        data_func = lambda x: process_re_data(get_re_data(x, max_len=max_len))
+        ent_i, sent_i = dataset.get_total_ent_sent()
+        log_info(prepare_logger, 'Load entities {}, sentences {}'.format(ent_i, sent_i))
+        log_info(cuda_logger, "Allocated data {}".format(cuda_mem_in_mb()))
+        log_info(cuda_logger, 'GPU Free {} Used {} Total {}'.format(gpu.memoryFree, gpu.memoryUsed, gpu.memoryTotal))
     else:
+        dataset = TextDataset(data_path, tokenizer, epoch_iter * batch_size, max_len=max_len,
+                              valid_func=lambda x: x.shape[0] > 2, truncate_mode=truncate_mode, eval_size=eval_size)
+        sent_i = len(dataset)
+        log_info(prepare_logger, 'Load sentences {}'.format(sent_i))
+        log_info(cuda_logger, "Allocated data {}".format(cuda_mem_in_mb()))
+        log_info(cuda_logger, 'GPU Free {} Used {} Total {}'.format(gpu.memoryFree, gpu.memoryUsed, gpu.memoryTotal))
+
+        def data_func(x):
+            batch, labels, attn_mask = get_tensor_batch(x)
+            return {'input_ids': batch, 'labels': labels, 'attention_mask': attn_mask}
+
+    if model_select == 1:
+        if not isinstance(dataset, IdxDataset):
+            log_info(prepare_logger, 'Not IdxDataset! Relation Model must use the IdxDataset!')
+            exit()
+        log_info(prepare_logger, 'Selected GPT2RE')
+        model = GPT2LMREModel.from_pretrained(load_path)
+    else:
+        log_info(prepare_logger, 'Selected GPT2LMHeadModel')
         model = tfm.GPT2LMHeadModel.from_pretrained(load_path)
-        model = model.to(device)
-        data = TextDataset(data_path, tokenizer, epoch_iter * batch_size, max_len=max_len,
-                           valid_func=lambda x: x.shape[0] > 2, truncate_mode=truncate_mode)
-        new_model, train_losses = train_normal(model, data, batch_size, epochs, epoch_iter, learning_rate=learning_rate,
-                                               weight_decay=weight_decay, n_gpus=n_gpus)
-        perplexity, perplexities, eval_losses = evaluate_normal(new_model, data, batch_size, epochs, epoch_iter,
-                                                                n_gpus=n_gpus)
+    model = model.to(device)
+    new_model, train_losses = train(model, dataset, batch_size, epochs, epoch_iter, learning_rate=learning_rate,
+                                    weight_decay=weight_decay, n_gpus=n_gpus,
+                                    save_path=save_path if save_model else None,
+                                    tokenizer=tokenizer, continue_train=continue_train,
+                                    from_checkpoint=from_checkpoint, data_func=data_func)
+    dataset.change_mode()
+    perplexity, perplexities, eval_losses = evaluate(new_model, dataset, batch_size, epochs, epoch_iter,
+                                                     data_func=data_func)
 
     if save_path is not None:
         if save_model:
