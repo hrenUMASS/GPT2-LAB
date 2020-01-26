@@ -1,18 +1,17 @@
 import argparse
 import json
+import logging
+import os
 
 import GPUtil
-# import torch
+import torch
 import transformers as tfm
 
-from loggers import *
-
-# import logging
-# import os
-
-# import logging
-# import os
-# from torch import nn
+from libs import TextDataset, IdxDataset, GPT2LMREModel
+from libs import evaluate, train
+from libs import get_module_from_parallel, get_re_data, get_tensor_batch, process_re_data
+from libs import log_info, initial_loggers, cuda_mem_in_mb
+from libs import loggers
 
 logging.getLogger('transformers.tokenization_utils').disabled = True
 
@@ -27,7 +26,7 @@ def single_train(config):
     load_path = config.get('load_path', 'gpt2-medium')
     save_path = config.get('save_path', None)
     save_model = config.get('save_model', False)
-
+    
     if save_path is not None:
         log_path = list(os.path.split(save_path))
         save_path = '/'.join(log_path) + '/'
@@ -36,6 +35,8 @@ def single_train(config):
         if not os.path.exists(save_path):
             os.mkdir(save_path)
         initial_loggers(log_path)
+
+    prepare_logger, cuda_logger, final_logger = loggers.prepare_logger, loggers.cuda_logger, loggers.final_logger
 
     json_encoder = json.JSONEncoder(ensure_ascii=False, indent=2)
     log_info(prepare_logger, 'config loaded:\n' + json_encoder.encode(config))
@@ -65,12 +66,6 @@ def single_train(config):
     log_info(cuda_logger, 'GPU Free {} Used {} Total {}'.format(gpu.memoryFree, gpu.memoryUsed, gpu.memoryTotal))
     log_info(cuda_logger, 'Start cuda memory {}'.format(cuda_mem_in_mb()))
     log_info(cuda_logger, 'Allocated model {}'.format(cuda_mem_in_mb()))
-
-    from dataset import TextDataset, IdxDataset
-    from gpt2_eval import evaluate
-    from gpt2_modified import GPT2LMREModel
-    from gpt2_train import train
-    from util import get_module_from_parallel, get_re_data, get_tensor_batch, process_re_data
 
     if 'idx_path' in config:
         lab_ent_data = lab_data_path + 'wiki2016_nchunk_entity_agg/'

@@ -1,11 +1,12 @@
 import numpy as np
-# import torch
+import torch
 import torch.nn.functional as F
 import tqdm
 from torch.utils.data import DataLoader
 
-from codes.loggers import *
-from codes.util import eval_one_epoch
+from . import loggers
+from .loggers import log_info
+from .util import eval_one_epoch
 
 
 def top_k_top_p_filtering(logits, top_k=0, top_p=0.0, filter_value=-float('Inf')):
@@ -67,6 +68,7 @@ def sample_sequence(model, length, context, num_samples=1, temperature=1, top_k=
 
 
 def evaluate(model, dataset, batch_size, epochs, epoch_iter, data_func=lambda x: x):
+    validation_logger = loggers.validation_logger
     eval_loss, eval_steps = 0, 0
     losses, perplexities = [], []
     data_loader = DataLoader(dataset, shuffle=False, batch_size=batch_size, collate_fn=lambda x: x)

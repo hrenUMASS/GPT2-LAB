@@ -2,17 +2,19 @@ import time
 from datetime import datetime
 
 import numpy as np
-# import torch
+import torch
 import transformers as tfm
 from torch import nn
 from torch.utils.data import DataLoader
 
-from codes.loggers import *
-from codes.util import train_one_epoch, get_module_from_parallel, save_checkpoint, load_checkpoint
+from . import loggers
+from .loggers import log_info
+from .util import train_one_epoch, get_module_from_parallel, save_checkpoint, load_checkpoint
 
 
 def train(model, dataset, batch_size, epochs, epoch_iter, learning_rate=1e-2, weight_decay=1e-4, n_gpus=1,
           save_path=None, from_checkpoint=False, continue_train=False, tokenizer=None, data_func=lambda x: x):
+    loss_logger, train_logger = loggers.loss_logger, loggers.train_logger
     no_decay = ['bias', 'LayerNorm.weight']
     device_ids = list(range(n_gpus))
     # SGD

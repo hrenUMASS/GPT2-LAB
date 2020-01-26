@@ -5,8 +5,8 @@ from typing import Sequence
 import numpy as np
 from torch import nn
 
-from codes.global_constants import *
-from codes.loggers import *
+from .global_constants import *
+from .loggers import *
 
 
 def get_index(ori, cmp):
