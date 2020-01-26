@@ -67,17 +67,20 @@ def sample_sequence(model, length, context, num_samples=1, temperature=1, top_k=
     return generated
 
 
-def evaluate(model, dataset, batch_size, epochs, epoch_iter, data_func=lambda x: x):
+def evaluate(model, dataset, batch_size, epochs, data_func=lambda x: x):
     validation_logger = loggers.validation_logger
     eval_loss, eval_steps = 0, 0
     losses, perplexities = [], []
-    data_loader = DataLoader(dataset, shuffle=False, batch_size=batch_size, collate_fn=lambda x: x)
     model.eval()
     for e in range(epochs):
+        data_loader = DataLoader(dataset, shuffle=True, batch_size=batch_size, collate_fn=lambda x: x)
+        epoch_iter = len(data_loader)
         loss, perp, eval_loss, eval_steps = eval_one_epoch(data_loader, model, eval_loss, eval_steps, data_func)
+        # print(len(losses))
         losses.extend(loss)
         perplexities.extend(perp)
         loss_seg = losses[e * epoch_iter:]
+        # print(len(loss), len(losses), e * epoch_iter)
         log_info(validation_logger, '----------------------------------------------------')
         log_info(validation_logger,
                  'Epoch {}, Mean Loss {}, Min Loss {}, Accum Loss {}'.format(e, np.mean(loss_seg), np.min(loss_seg),

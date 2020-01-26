@@ -203,6 +203,7 @@ def get_model_output(model, data):
 
 def train_one_epoch(dataloader, model, optimizer, scheduler, data_process_func):
     losses = []
+    # print(len(dataloader))
     for step, raw in enumerate(dataloader):
         step_time = time.time()
         data = data_process_func(raw)
@@ -225,6 +226,7 @@ def train_one_epoch(dataloader, model, optimizer, scheduler, data_process_func):
 
 
 def eval_one_epoch(dataloader, model, eval_loss, eval_steps, data_process_func):
+    # print(len(dataloader))
     losses, perplexities = [], []
     for step, raw in enumerate(dataloader):
         step_time = time.time()
@@ -234,10 +236,10 @@ def eval_one_epoch(dataloader, model, eval_loss, eval_steps, data_process_func):
         with torch.no_grad():
             loss = get_model_output(model, data)
             loss_value = loss.item()
-            eval_loss += loss_value
-            eval_steps += 1
-            perplex_value = torch.exp(torch.tensor(eval_loss / eval_steps)).item()
-            perplexities.append(perplex_value)
+        eval_loss += loss_value
+        eval_steps += 1
+        perplex_value = torch.exp(torch.tensor(eval_loss / eval_steps)).item()
+        perplexities.append(perplex_value)
         losses.append(loss_value)
         log_info(train_logger, '{} Iter Loss {} Perplexity {} Time {}'.format(step, loss_value, perplex_value,
                                                                               time.time() - step_time))

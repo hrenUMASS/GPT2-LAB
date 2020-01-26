@@ -30,7 +30,7 @@ def train(model, dataset, batch_size, epochs, epoch_iter, learning_rate=1e-2, we
                                                     num_training_steps=epochs * epoch_iter)
     losses = []
     # gpu = GPUtil.getGPUs()[0]
-    n = len(dataset) // 9000
+    n = max(len(dataset) // 9000, 1)
     data_loaders = [DataLoader(i, shuffle=False, batch_size=batch_size, collate_fn=lambda x: x) for i in
                     dataset.split(n)]
     mini_epoch = 0
@@ -46,16 +46,16 @@ def train(model, dataset, batch_size, epochs, epoch_iter, learning_rate=1e-2, we
     model.train()
     for e in range(epochs):
         epoch_start = time.time()
-        for ed, data_loader in enumerate(data_loaders[mini_epoch:] if continue_train else data_loaders):
-            continue_train = False
+        for ed, data_loader in enumerate(data_loaders[mini_epoch:]):
+            mini_epoch = 0
             loss_value, loss = train_one_epoch(data_loader, model, optimizer, scheduler, data_process_func=data_func)
             losses.extend(loss_value)
             if save_path is not None:
                 get_module_from_parallel(model).save_pretrained(save_path)
                 if tokenizer is not None:
                     tokenizer.save_pretrained(save_path)
-                save_checkpoint(save_path + 'checkpoint.pt', model, e, ed, optimizer, scheduler, loss)
-                log_info(loss_logger, 'saved models for mini epoch {} in epoch {}'.format(ed, e))
+                save_checkpoint(save_path + 'checkpoint.pt', model, e, ed + mini_epoch, optimizer, scheduler, loss)
+                log_info(loss_logger, 'saved models for mini epoch {} in epoch {}'.format(ed + mini_epoch, e))
         loss_seg = losses[e * epoch_iter:]
         log_info(train_logger, '-' * 50)
         log_info(train_logger, 'Epoch {}, Mean Loss {}, Min Loss {}'.format(e, np.mean(loss_seg), np.min(loss_seg)))

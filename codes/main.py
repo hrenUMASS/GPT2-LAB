@@ -26,7 +26,7 @@ def single_train(config):
     load_path = config.get('load_path', 'gpt2-medium')
     save_path = config.get('save_path', None)
     save_model = config.get('save_model', False)
-    
+
     if save_path is not None:
         log_path = list(os.path.split(save_path))
         save_path = '/'.join(log_path) + '/'
@@ -112,7 +112,7 @@ def single_train(config):
                                     tokenizer=tokenizer, continue_train=continue_train,
                                     from_checkpoint=from_checkpoint, data_func=data_func)
     dataset.change_mode()
-    perplexity, perplexities, eval_losses = evaluate(new_model, dataset, batch_size, epochs, epoch_iter,
+    perplexity, perplexities, eval_losses = evaluate(new_model, dataset, batch_size, epochs,
                                                      data_func=data_func)
 
     if save_path is not None:
@@ -126,7 +126,7 @@ def single_train(config):
         torch.save(train_losses, log_path + 'train_losses.pt')
         log_info(final_logger, 'saving evaluation losses')
         torch.save(eval_losses, log_path + 'eval_losses.pt')
-        torch.save(torch.tensor(perplexity), log_path + 'perplexity.pt')
+        torch.save(perplexity, log_path + 'perplexity.pt')
         torch.save(perplexities, log_path + 'perplexities.pt')
 
 

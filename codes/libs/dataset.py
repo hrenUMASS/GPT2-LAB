@@ -128,13 +128,14 @@ class IdxDataset(DatasetWithEval):
         return e1, e2, sent, idx
 
     def _read_block(self):
-        ents = set(self.data[:, [0, 1]].reshape(1, -1).sequeeze())
+        ents = set(self.data[:, [0, 1]].reshape(1, -1).squeeze())
         sents = set(self.data[:, 2])
-        for i in range(np.max(ents) + 1):
+        print(ents, sents)
+        for i in range(max(ents) + 1):
             ent = self.ent_file.readline()[:-1]
             if i in ents:
                 self.ent_data[i] = ent
-        for i in range(np.max(sents) + 1):
+        for i in range(max(sents) + 1):
             sent = self.sent_file.readline()[:-1]
             if i in sents:
                 self.sent_data[i] = encode(self.tokenizer, sent, add_eos=True, add_prefix_space=True)
