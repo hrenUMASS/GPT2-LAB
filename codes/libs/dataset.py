@@ -81,10 +81,16 @@ class DatasetWithEval(Dataset):
         data = self.get_data()
         temp_data = dict(data)
         # print(list(param.keys()), list(data.keys()))
+        # print('one', {k: len(v) for k, v in data.items()}, self.total_len, eval_size)
+        for k in data:
+            if k in split_mark:
+                data[k] = data[k][:self.total_len + eval_size * 5]
+        # print('two', {k: len(v) for k, v in data.items()}, self.total_len, eval_size)
         for i in range(n):
             for k in temp_data:
                 if k in split_mark:
                     temp_data[k] = data[k][i:l:n]
+                    # print(len(temp_data[k]))
             param['data'] = temp_data
             result.append(type(self)(**param))
         return result
@@ -105,12 +111,13 @@ class TextDataset(DatasetWithEval):
 class IdxDataset(DatasetWithEval):
 
     def __init__(self, tokenizer, idx_file=None, total_len=512, eval_size=512, data=None, **kwargs):
+        # print('idx', total_len, eval_size, data)
         super(IdxDataset, self).__init__(tokenizer, total_len, eval_size=eval_size)
         if idx_file is not None and data is None:
             self.idx_file = idx_file
             self.data = np.array(self.load_idx())
         else:
-            self.data = data['idx']
+            self.data = data['data']
             self.total_len = len(self.data) - self.eval_size
 
     def load_idx(self):
@@ -118,7 +125,7 @@ class IdxDataset(DatasetWithEval):
         data_len = self.total_len + self.eval_size
         for i, line in enumerate(self.idx_file):
             result.append(tuple(map(lambda x: int(x), line.split())))
-            if i >= data_len:
+            if i >= data_len - 1:
                 break
         return result
 
@@ -126,7 +133,7 @@ class IdxDataset(DatasetWithEval):
         return len(self.data)
 
     def __getitem__(self, item):
-        idx = IdxDataset.__getitem__(self, item)
+        idx = DatasetWithEval.__getitem__(self, item)
         return idx[0], idx[1], idx[2]
 
 
@@ -191,7 +198,7 @@ class IdxEntityDataset(IdxDataset):
         return self.ent_data[e1i], self.ent_data[e2i], (e1i, e2i)
 
     def get_data(self):
-        result = {'sent': self.ent_data}
+        result = {'ent': self.ent_data}
         result.update(IdxDataset.get_data(self))
         return result
 
@@ -202,10 +209,6 @@ class IdxFullDataset(IdxEntityDataset, IdxTextDataset):
                  **kwargs):
         super(IdxFullDataset, self).__init__(tokenizer, total_len=total_len, eval_size=eval_size, idx_file=idx_file,
                                              ent_file=ent_file, sent_file=sent_file, data=data, **kwargs)
-        print(self.data)
-        print(self.ent_data)
-        print(self.sent_data)
-        print(self.get_loaded_length())
 
     def __getitem__(self, item):
         e1, e2, eidx = IdxEntityDataset.__getitem__(self, item)

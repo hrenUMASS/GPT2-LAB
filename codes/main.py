@@ -97,6 +97,7 @@ def single_train(config):
             return {'input_ids': batch, 'labels': labels, 'attention_mask': attn_mask}
 
         log_info(prepare_logger, 'Load idxs {} sentences {}'.format(*dataset.get_loaded_length()))
+    log_info(prepare_logger, 'Load training {} validation {}'.format(dataset.total_len, dataset.eval_size))
     log_info(cuda_logger, "Allocated data {}".format(cuda_mem_in_mb()))
     log_info(cuda_logger, 'GPU Free {} Used {} Total {}'.format(gpu.memoryFree, gpu.memoryUsed, gpu.memoryTotal))
 
