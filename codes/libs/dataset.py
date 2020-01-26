@@ -128,7 +128,7 @@ class IdxDataset(DatasetWithEval):
         return e1, e2, sent, idx
 
     def _read_block(self):
-        ents = set(self.data[:, [0, 1]].view(1, -1).sequeeze())
+        ents = set(self.data[:, [0, 1]].reshape(1, -1).sequeeze())
         sents = set(self.data[:, 2])
         for i in range(np.max(ents) + 1):
             ent = self.ent_file.readline()[:-1]
