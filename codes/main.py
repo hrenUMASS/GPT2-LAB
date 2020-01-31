@@ -7,15 +7,14 @@ import GPUtil
 import torch
 import transformers as tfm
 
-from libs import IdxDataset, GPT2LMREModel, IdxTextDataset, IdxFullDataset
-from libs import evaluate, train
-from libs import get_module_from_parallel, get_re_data, get_tensor_batch, process_re_data
-from libs import log_info, initial_loggers, cuda_mem_in_mb
+from libs import IdxDataset, GPT2LMREModel, IdxEntityDataset, IdxFullDataset
+from libs import evaluate, train, eval_sequences
+from libs import get_module_from_parallel, get_re_data, get_tensor_batch, process_re_data, get_dict
+from libs import log_info, initial_train_val_loggers, cuda_mem_in_mb, initial_generation_loggers
 from libs import loggers
+from libs import main_device
 
 logging.getLogger('transformers.tokenization_utils').disabled = True
-
-device = torch.device('cuda:0')
 
 
 def single_train(config):
@@ -28,13 +27,14 @@ def single_train(config):
     save_model = config.get('save_model', False)
 
     if save_path is not None:
-        log_path = list(os.path.split(save_path))
-        save_path = '/'.join(log_path) + '/'
+        if save_path[-1] != '/':
+            save_path += '/'
+        log_path = list(os.path.split(save_path)[:-1])
         log_path.append('log/')
         log_path = '/'.join(log_path)
         if not os.path.exists(save_path):
             os.mkdir(save_path)
-        initial_loggers(log_path)
+        initial_train_val_loggers(log_path)
 
     prepare_logger, cuda_logger, final_logger = loggers.prepare_logger, loggers.cuda_logger, loggers.final_logger
 
@@ -46,23 +46,23 @@ def single_train(config):
     tokenizer = tfm.GPT2Tokenizer.from_pretrained(load_path)
     log_info(prepare_logger, 'model loaded')
 
-    epochs = config.get('epochs', 20)
-    epoch_iter = config.get('epoch_iter', 100)
-    batch_size = config.get('batch_size', 16)
-    learning_rate = float(config.get('learning_rate', 1e-2))
-    weight_decay = float(config.get('weight_decay', 1e-4))
-    n_gpus = config.get('n_gpus', 4)
-    max_len = config.get('max_len', 512)
-    truncate_mode = config.get('truncate_mode', 'truncate')
-    model_select = config.get('model_select', 0)
-    continue_train = config.get('continue', False)
-    from_checkpoint = config.get('from_checkpoint', continue_train)
-    eval_size = config.get('eval_size', min(epoch_iter // 2, 1000))
+    epochs = get_dict(config, 'epochs', 20)
+    epoch_iter = get_dict(config, 'epoch_iter', 100)
+    batch_size = get_dict(config, 'batch_size', 16)
+    learning_rate = float(get_dict(config, 'learning_rate', 1e-2))
+    weight_decay = float(get_dict(config, 'weight_decay', 1e-4))
+    n_gpus = get_dict(config, 'n_gpus', 4)
+    max_len = get_dict(config, 'max_len', 512)
+    truncate_mode = get_dict(config, 'truncate_mode', 'truncate')
+    model_select = get_dict(config, 'model_select', 0)
+    continue_train = get_dict(config, 'continue', False)
+    from_checkpoint = get_dict(config, 'from_checkpoint', continue_train)
+    eval_size = get_dict(config, 'eval_size', min(epoch_iter // 2, 1000))
 
     lab_ent_data = lab_data_path + 'wiki2016_nchunk_entity_agg/'
-    ent_path = config.get('ent_path', lab_ent_data + 'wiki2016_ent')
-    sent_path = config.get('sent_path', '/iesl/canvas/hren/gpt2_wiki_lab/data/wiki2016_sents_mapped')
-    idx_path = config.get('idx_path', lab_ent_data + 'wiki2016_idx')
+    ent_path = get_dict(config, 'ent_path', lab_ent_data + 'wiki2016_ent')
+    sent_path = get_dict(config, 'sent_path', '/iesl/canvas/hren/gpt2_wiki_lab/data/wiki2016_sents_mapped')
+    idx_path = get_dict(config, 'idx_path', lab_ent_data + 'wiki2016_idx')
 
     log_info(cuda_logger, 'avaliable cudas {}'.format(torch.cuda.device_count()))
     log_info(prepare_logger, 'start training:\n\tepochs: {}\n\tepoch_iter: {}\n\tbatch_size: {}'.format(
@@ -81,27 +81,30 @@ def single_train(config):
         idx_file.close()
         ent_file.close()
         sent_file.close()
-        data_func = lambda x: process_re_data(get_re_data(x, max_len=max_len))
+        data_func = lambda x: process_re_data(get_re_data(x, max_len=max_len, batch_size=batch_size))
         log_info(prepare_logger, 'Load idxes {} entities {}, sentences {}'.format(*dataset.get_loaded_length()))
 
     else:
         idx_file = open(idx_path, 'r')
+        ent_file = open(ent_path, 'r')
         sent_file = open(sent_path, 'r')
-        dataset = IdxTextDataset(tokenizer, idx_file=idx_file, sent_file=sent_file, total_len=epoch_iter * batch_size,
-                                 eval_size=eval_size * batch_size)
+        dataset = IdxFullDataset(tokenizer, idx_file=idx_file, ent_file=ent_file, sent_file=sent_file,
+                                 total_len=epoch_iter * batch_size, eval_size=eval_size * batch_size)
         idx_file.close()
+        ent_file.close()
         sent_file.close()
 
         def data_func(x):
-            batch, labels, attn_mask = get_tensor_batch(x[0])
-            return {'input_ids': batch, 'labels': labels, 'attention_mask': attn_mask}
+            batch, labels, attn_mask = get_tensor_batch(get_re_data(x, max_len=max_len, batch_size=batch_size)['sent'])
+            result = {'input_ids': batch, 'labels': labels, 'attention_mask': attn_mask}
+            return result
 
         log_info(prepare_logger, 'Load idxs {} sentences {}'.format(*dataset.get_loaded_length()))
     log_info(prepare_logger, 'Load training {} validation {}'.format(dataset.total_len, dataset.eval_size))
     log_info(cuda_logger, "Allocated data {}".format(cuda_mem_in_mb()))
     log_info(cuda_logger, 'GPU Free {} Used {} Total {}'.format(gpu.memoryFree, gpu.memoryUsed, gpu.memoryTotal))
 
-    if model_select in (1, 2):
+    if model_select == 1:
         if not isinstance(dataset, IdxDataset):
             log_info(prepare_logger, 'Not IdxDataset!')
             exit()
@@ -110,7 +113,7 @@ def single_train(config):
     else:
         log_info(prepare_logger, 'Selected GPT2LMHeadModel')
         model = tfm.GPT2LMHeadModel.from_pretrained(load_path)
-    model = model.to(device)
+    model = model.to(main_device)
     new_model, train_losses = train(model, dataset, batch_size, epochs, epoch_iter, learning_rate=learning_rate,
                                     weight_decay=weight_decay, n_gpus=n_gpus,
                                     save_path=save_path if save_model else None,
@@ -133,6 +136,77 @@ def single_train(config):
         torch.save(eval_losses, log_path + 'eval_losses.pt')
         torch.save(perplexity, log_path + 'perplexity.pt')
         torch.save(perplexities, log_path + 'perplexities.pt')
+        log_info(final_logger, 'All saved')
+
+
+def single_sequence_generation(config):
+    # project_path = '/iesl/canvas/hren/gpt2_wiki_lab/v1'
+    print(config)
+    lab_data_path = '/iesl/canvas/hschang/language_modeling/NSD_for_sentence_embedding/data/raw/'
+    load_path = get_dict(config, 'load_path', 'gpt2-medium')
+    save_path = get_dict(config, 'save_path', None)
+
+    if save_path is not None:
+        if save_path[-1] != '/':
+            save_path += '/'
+        log_path = list(os.path.split(save_path)[:-1])
+        log_path.append('log/')
+        log_path = '/'.join(log_path)
+        if not os.path.exists(save_path):
+            os.mkdir(save_path)
+        initial_generation_loggers(log_path, clear=False)
+
+    prepare_logger, cuda_logger, final_logger = loggers.prepare_logger, loggers.cuda_logger, loggers.final_logger
+
+    json_encoder = json.JSONEncoder(ensure_ascii=False, indent=2)
+    log_info(prepare_logger, 'config loaded:\n' + json_encoder.encode(config))
+
+    log_info(prepare_logger, 'loading models: ' + load_path)
+
+    tokenizer = tfm.GPT2Tokenizer.from_pretrained(load_path)
+    log_info(prepare_logger, 'model loaded')
+
+    num_samples = get_dict(config, 'num_samples', 20)
+    num_idx = get_dict(config, 'num_idx', 3200)
+    n_gpus = get_dict(config, 'n_gpus', 4)
+    max_len = get_dict(config, 'max_len', 200)
+
+    lab_ent_data = lab_data_path + 'wiki2016_nchunk_entity_agg/'
+    ent_path = get_dict(config, 'ent_path', lab_ent_data + 'wiki2016_ent')
+    ent_data = get_dict(config, 'ent_data', None)
+    idx_path = get_dict(config, 'idx_path', lab_ent_data + 'wiki2016_idx')
+
+    log_info(cuda_logger, 'avaliable cudas {}'.format(torch.cuda.device_count()))
+    log_info(prepare_logger, 'start training:\n\tnum_samples: {}\n\tnum_idx: {}\n\t'.format(num_samples, num_idx))
+    gpu = GPUtil.getGPUs()[0]
+    log_info(cuda_logger, 'GPU Free {} Used {} Total {}'.format(gpu.memoryFree, gpu.memoryUsed, gpu.memoryTotal))
+    log_info(cuda_logger, 'Start cuda memory {}'.format(cuda_mem_in_mb()))
+    log_info(cuda_logger, 'Allocated model {}'.format(cuda_mem_in_mb()))
+
+    data = {}
+    if ent_data is not None:
+        data['ent'] = torch.load(ent_data)
+
+    idx_file = open(idx_path, 'r')
+    ent_file = open(ent_path, 'r')
+    dataset = IdxEntityDataset(tokenizer, idx_file=idx_file, ent_file=ent_file, total_len=num_idx, data=data)
+    idx_file.close()
+    ent_file.close()
+    log_info(prepare_logger, 'Load idxes {} entities {}'.format(*dataset.get_loaded_length()))
+
+    log_info(cuda_logger, "Allocated data {}".format(cuda_mem_in_mb()))
+    log_info(cuda_logger, 'GPU Free {} Used {} Total {}'.format(gpu.memoryFree, gpu.memoryUsed, gpu.memoryTotal))
+
+    log_info(prepare_logger, 'Selected GPT2LMHeadModel')
+    model = tfm.GPT2LMHeadModel.from_pretrained(load_path)
+    model = model.to(main_device)
+    data_func = lambda x: {'e1': x[0], 'e2': x[1], 'idx': x[2]}
+    ratios = eval_sequences(model, dataset, num_samples, max_len, data_func=data_func, tokenizer=tokenizer)
+
+    if save_path is not None:
+        log_info(final_logger, 'saving ratios')
+        torch.save(ratios, log_path + 'ratios.pt')
+        log_info(final_logger, 'All saved')
 
 
 def main(config_file='model_config.json'):
@@ -154,7 +228,11 @@ def main(config_file='model_config.json'):
                 new_config[k] = v[i]
             else:
                 new_config[k] = v
-        single_train(new_config)
+        mode = new_config.get('mode', 'train_eval')
+        if mode == 'train_eval':
+            single_train(new_config)
+        elif mode == 'eval_sequences':
+            single_sequence_generation(new_config)
 
 
 if __name__ == '__main__':

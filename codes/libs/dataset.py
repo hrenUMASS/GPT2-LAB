@@ -48,12 +48,15 @@ def get_tokens(tokenizer, ent):
 
 
 class DatasetWithEval(Dataset):
-    def __init__(self, tokenizer, total_len, eval_size=0, **kwargs):
+    def __init__(self, tokenizer, total_len, eval_size=0, data=None, **kwargs):
         self.tokenizer = tokenizer
         self.total_len = total_len
         self.eval = False
         self.eval_size = eval_size
-        self.data = []
+        if data is None:
+            self.data = []
+        else:
+            self.data = data['data']
 
     def change_mode(self, evaluate=True):
         self.eval = evaluate
@@ -113,17 +116,17 @@ class IdxDataset(DatasetWithEval):
     def __init__(self, tokenizer, idx_file=None, total_len=512, eval_size=512, data=None, **kwargs):
         # print('idx', total_len, eval_size, data)
         super(IdxDataset, self).__init__(tokenizer, total_len, eval_size=eval_size)
-        if idx_file is not None and data is None:
-            self.idx_file = idx_file
-            self.data = np.array(self.load_idx())
+        if data is not None and 'idx' in data:
+            self.data = data['idx']
         else:
-            self.data = data['data']
-            self.total_len = len(self.data) - self.eval_size
+            self.data = self.load_idx(idx_file)
+        self.data = np.array(self.data)
 
-    def load_idx(self):
+    def load_idx(self, idx_file):
+        print('loading idx', idx_file.name)
         result = []
         data_len = self.total_len + self.eval_size
-        for i, line in enumerate(self.idx_file):
+        for i, line in enumerate(idx_file):
             result.append(tuple(map(lambda x: int(x), line.split())))
             if i >= data_len - 1:
                 break
@@ -142,17 +145,20 @@ class IdxTextDataset(IdxDataset):
     def __init__(self, tokenizer, idx_file=None, sent_file=None, total_len=512, data=None, eval_size=0, **kwargs):
         super(IdxTextDataset, self).__init__(tokenizer, idx_file=idx_file, total_len=total_len, eval_size=eval_size,
                                              data=data, **kwargs)
-        if None not in (idx_file, sent_file) and data is None:
-            self.sent_file = sent_file
-            self.sent_data = self.load_sent()
-        else:
+        if data is not None and 'sent' in data:
             self.sent_data = data['sent']
+            all_sents = self.data[:, 2]
+            if not all(x in data['sent'] for x in all_sents):
+                self.sent_data = self.load_sent(sent_file)
+        else:
+            self.sent_data = self.load_sent(sent_file)
 
-    def load_sent(self):
+    def load_sent(self, sent_file):
+        print('loading sentences', sent_file.name)
         result = {}
         sents = set(self.data[:, 2])
         for i in range(max(sents) + 1):
-            sent = self.sent_file.readline()[:-1]
+            sent = sent_file.readline()[:-1]
             if i in sents:
                 result[i] = encode(self.tokenizer, sent, add_eos=True, add_prefix_space=True)
         return result
@@ -175,17 +181,21 @@ class IdxEntityDataset(IdxDataset):
     def __init__(self, tokenizer, idx_file=None, ent_file=None, total_len=512, data=None, eval_size=0, **kwargs):
         super(IdxEntityDataset, self).__init__(tokenizer, idx_file=idx_file, total_len=total_len, eval_size=eval_size,
                                                data=data, **kwargs)
-        if None not in (idx_file, ent_file) and data is None:
-            self.ent_file = ent_file
-            self.ent_data = self.load_ent()
-        else:
+        if data is not None and 'ent' in data:
             self.ent_data = data['ent']
+            all_ents = self.data[:, [0, 1]].reshape(1, -1).squeeze()
+            if not all(x in data['ent'] for x in all_ents):
+                print('Not all entity in idx exists in ent')
+                self.ent_data = self.load_ent(ent_file)
+        else:
+            self.ent_data = self.load_ent(ent_file)
 
-    def load_ent(self):
+    def load_ent(self, ent_file):
+        print('loading entities', ent_file.name)
         result = {}
         ents = set(self.data[:, [0, 1]].reshape(1, -1).squeeze())
         for i in range(max(ents) + 1):
-            ent = self.ent_file.readline()[:-1]
+            ent = ent_file.readline()[:-1]
             if i in ents:
                 result[i] = ent
         return result
@@ -213,7 +223,9 @@ class IdxFullDataset(IdxEntityDataset, IdxTextDataset):
     def __getitem__(self, item):
         e1, e2, eidx = IdxEntityDataset.__getitem__(self, item)
         sent, senti = IdxTextDataset.__getitem__(self, item)
+        # print(e1, e2, sent)
         e1, e2 = self.unify_entity(e1, sent, senti), self.unify_entity(e2, sent, senti)
+        sent, senti = IdxTextDataset.__getitem__(self, item)
         return e1, e2, sent, (*eidx, senti)
 
     def get_loaded_length(self):
@@ -221,43 +233,35 @@ class IdxFullDataset(IdxEntityDataset, IdxTextDataset):
 
     def unify_entity(self, ent, sent, sent_idx):
         def in_tensor(ent, sent_tok, idx):
-            leng = 0
+            tot = ''
+            changed = False
             for k in range(idx, len(sent_tok)):
                 temp = sent_tok[k].replace(space, '')
-                l = len(temp)
-                if temp == ent[leng:leng + l]:
-                    leng += l
-                elif ent[leng] == space and temp == ent[leng + 1:leng + l + 1]:
-                    leng += (1 + l)
+                if temp[:2] == '.,' and len(tot) == len(ent) - 1:
+                    tot += '.'
                 else:
-                    if ent[leng] == space:
-                        leng += 1
-                    i = 0
-                    while leng < len(ent):
-                        if ent[leng] != temp[i]:
-                            return None
-                        leng += 1
-                        i += 1
-                    p1 = temp[:i]
-                    p2 = temp[i:]
-                    sent_tok[k] = p1
-                    sent_tok.insert(k + 1, p2)
-                    return sent_tok[idx:k + 2]
-                if leng == len(ent):
-                    return sent_tok[idx:k + 1]
+                    tot = (tot + temp) if ent.startswith(tot + temp) else (
+                        (tot + space + temp) if ent.startswith(tot + space + temp) else None)
+                if tot is None:
+                    return None, False
+                elif tot == ent:
+                    if temp[:2] == '.,':
+                        sent_tok[k] = '.'
+                        sent_tok.insert(k + 1, temp[1:])
+                        changed = True
+                    return sent_tok[idx: k + 1], changed
 
         space = 'Ġ'
         sent_tok = self.tokenizer.convert_ids_to_tokens(sent)
         ent_temp = ''.join(self.tokenizer.tokenize(ent))
         # print(ent_temp)
         for i in range(len(sent_tok)):
-            temp = sent_tok[i].replace(space, '')
-            if ent_temp.startswith(temp):
-                ent_tok = in_tensor(ent_temp, sent_tok, i)
+            tmp = sent_tok[i].replace(space, '')
+            if ent_temp.startswith(tmp):
+                ent_tok, changed = in_tensor(ent_temp, sent_tok, i)
                 if ent_tok is not None:
-                    # print(True)
-                    # print(ent_tok, sent_tok)
-                    self.sent_data[sent_idx] = encode(self.tokenizer, sent_tok)
+                    if changed:
+                        self.sent_data[sent_idx] = encode(self.tokenizer, sent_tok)
                     return encode(self.tokenizer, ent_tok)
         return encode(self.tokenizer, ent)
 

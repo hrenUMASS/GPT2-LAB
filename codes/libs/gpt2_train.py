@@ -16,7 +16,7 @@ def train(model, dataset, batch_size, epochs, epoch_iter, learning_rate=1e-2, we
           save_path=None, from_checkpoint=False, continue_train=False, tokenizer=None, data_func=lambda x: x):
     loss_logger, train_logger = loggers.loss_logger, loggers.train_logger
     no_decay = ['bias', 'LayerNorm.weight']
-    device_ids = list(range(n_gpus))
+    # device_ids = list(range(n_gpus))
     # SGD
     # fix learning rate
     #
@@ -44,7 +44,7 @@ def train(model, dataset, batch_size, epochs, epoch_iter, learning_rate=1e-2, we
         scheduler.load_state_dict(scheduler_state)
         if continue_train:
             epochs = epochs - epoch + 1
-    model = nn.DataParallel(model, device_ids)
+    model = nn.DataParallel(model)
     model.train()
     for e in range(epochs):
         epoch_start = time.time()

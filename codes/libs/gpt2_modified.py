@@ -1,10 +1,11 @@
 import math
 
-import torch
 from torch import nn
 from torch.nn import CrossEntropyLoss
 from transformers import GPT2PreTrainedModel
 from transformers.modeling_gpt2 import Block
+
+from .global_constants import *
 
 
 # from util import cat_tensors
@@ -62,7 +63,6 @@ class GPT2REModel(GPT2PreTrainedModel):
             self.h[layer].attn.prune_heads(heads)
 
     def forward(self, input_ids, attention_mask, position_ids, token_type_ids):
-
         device = input_ids.device
 
         inputs_embeds = torch.zeros(*input_ids.shape, self.wte.embedding_dim, dtype=self.wte.weight.dtype,
@@ -169,10 +169,10 @@ class GPT2LMREModel(GPT2PreTrainedModel):
 
         outputs = (lm_logits,) + transformer_outputs[1:]
         if labels is not None:
-            ignore_index = -100
-
             # Shift so that tokens < n predict n
             # print(e1_labels.shape, e2_labels.shape, labels.shape)
+            # print(lm_logits.shape)
+            # print(lm_logits[..., :-1, :].shape)
             shift_logits = lm_logits[..., :-1, :].contiguous()
             shift_labels = labels[..., 1:].contiguous()
             # Flatten the tokens
