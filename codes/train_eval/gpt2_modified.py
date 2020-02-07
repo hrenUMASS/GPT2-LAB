@@ -1,11 +1,10 @@
 import math
 
+import torch
 from torch import nn
 from torch.nn import CrossEntropyLoss
 from transformers import GPT2PreTrainedModel
 from transformers.modeling_gpt2 import Block
-
-from .global_constants import *
 
 
 # from util import cat_tensors
@@ -160,7 +159,7 @@ class GPT2LMREModel(GPT2PreTrainedModel):
         return inputs
 
     def forward(self, input_ids, attention_mask=None, position_ids=None, token_type_ids=None, labels=None):
-
+        from global_constants import ignore_index
         transformer_outputs = self.transformer(input_ids=input_ids, attention_mask=attention_mask,
                                                position_ids=position_ids, token_type_ids=token_type_ids)
         hidden_states = transformer_outputs[0]

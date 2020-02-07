@@ -2,7 +2,7 @@ import numpy as np
 import transformers as tfm
 from torch.utils.data import Dataset
 
-from .util import encode
+from libs import encode
 
 
 def _read_block(fp, total_len, tokenizer: tfm.PreTrainedTokenizer, max_len=None, valid_func=lambda x: True,
@@ -47,30 +47,34 @@ def get_tokens(tokenizer, ent):
            tokenizer.encode(ent, return_tensors='pt')[0]
 
 
-class DatasetWithEval(Dataset):
-    def __init__(self, tokenizer, total_len, eval_size=0, data=None, **kwargs):
+class IdxDataset(Dataset):
+
+    def __init__(self, tokenizer, idx_file=None, batch_len=100, data=None, **kwargs):
+        # print('idx', total_len, eval_size, data)
         self.tokenizer = tokenizer
-        self.total_len = total_len
-        self.eval = False
-        self.eval_size = eval_size
-        if data is None:
-            self.data = []
+        self.batch_len = batch_len
+        if data is not None and 'idx' in data:
+            self.data = data['idx']
         else:
-            self.data = data['data']
+            self.data = self.load_idx(idx_file)
+        self.data = np.array(self.data)
 
-    def change_mode(self, evaluate=True):
-        self.eval = evaluate
-        return self
+    def load_idx(self, idx_file):
+        print('loading idx', idx_file.name)
+        result = []
+        data_len = self.batch_len * 3200
+        for i, line in enumerate(idx_file):
+            result.append(tuple(map(lambda x: int(x), line.split())))
+            if i >= data_len - 1:
+                break
+        return result
 
-    def __len__(self):
-        if self.eval:
-            return self.eval_size
-        return self.total_len
+    def get_loaded_length(self):
+        return len(self.data)
 
     def __getitem__(self, item):
-        if self.eval:
-            item += self.total_len
-        return self.data[item]
+        idx = self.data[item]
+        return idx[0], idx[1], idx[2]
 
     def get_data(self):
         return {'data': self.data}
@@ -83,85 +87,36 @@ class DatasetWithEval(Dataset):
         result = []
         data = self.get_data()
         temp_data = dict(data)
-        # print(list(param.keys()), list(data.keys()))
-        # print('one', {k: len(v) for k, v in data.items()}, self.total_len, eval_size)
-        for k in data:
-            if k in split_mark:
-                data[k] = data[k][:self.total_len + eval_size * 5]
-        # print('two', {k: len(v) for k, v in data.items()}, self.total_len, eval_size)
         for i in range(n):
             for k in temp_data:
                 if k in split_mark:
                     temp_data[k] = data[k][i:l:n]
-                    # print(len(temp_data[k]))
             param['data'] = temp_data
             result.append(type(self)(**param))
         return result
 
 
-class TextDataset(DatasetWithEval):
-
-    def __init__(self, fp, tokenizer, total_len, valid_func=lambda x: True,
-                 process_func=lambda x: x, max_len=None, truncate_mode='truncate', eval_size=512):
-        super(TextDataset, self).__init__(tokenizer, total_len, eval_size=eval_size)
-        if isinstance(fp, str):
-            fp = open(fp, 'r')
-        data_len = total_len + eval_size
-        self.data = _read_block(fp, data_len, tokenizer, max_len=max_len, valid_func=valid_func,
-                                process_func=process_func, truncate_mode=truncate_mode, add_eos=True)
-
-
-class IdxDataset(DatasetWithEval):
-
-    def __init__(self, tokenizer, idx_file=None, total_len=512, eval_size=512, data=None, **kwargs):
-        # print('idx', total_len, eval_size, data)
-        super(IdxDataset, self).__init__(tokenizer, total_len, eval_size=eval_size)
-        if data is not None and 'idx' in data:
-            self.data = data['idx']
-        else:
-            self.data = self.load_idx(idx_file)
-        self.data = np.array(self.data)
-
-    def load_idx(self, idx_file):
-        print('loading idx', idx_file.name)
-        result = []
-        data_len = self.total_len + self.eval_size
-        for i, line in enumerate(idx_file):
-            result.append(tuple(map(lambda x: int(x), line.split())))
-            if i >= data_len - 1:
-                break
-        return result
-
-    def get_loaded_length(self):
-        return len(self.data)
-
-    def __getitem__(self, item):
-        idx = DatasetWithEval.__getitem__(self, item)
-        return idx[0], idx[1], idx[2]
-
-
 class IdxTextDataset(IdxDataset):
 
-    def __init__(self, tokenizer, idx_file=None, sent_file=None, total_len=512, data=None, eval_size=0, **kwargs):
-        super(IdxTextDataset, self).__init__(tokenizer, idx_file=idx_file, total_len=total_len, eval_size=eval_size,
-                                             data=data, **kwargs)
+    def __init__(self, tokenizer, idx_file=None, sent_file=None, batch_len=100, data=None, **kwargs):
+        super(IdxTextDataset, self).__init__(tokenizer, idx_file=idx_file, batch_len=batch_len, data=data, **kwargs)
+        self.sent_data = {}
         if data is not None and 'sent' in data:
             self.sent_data = data['sent']
             all_sents = self.data[:, 2]
             if not all(x in data['sent'] for x in all_sents):
-                self.sent_data = self.load_sent(sent_file)
+                self.load_sent(sent_file)
         else:
-            self.sent_data = self.load_sent(sent_file)
+            self.load_sent(sent_file)
 
     def load_sent(self, sent_file):
         print('loading sentences', sent_file.name)
-        result = {}
         sents = set(self.data[:, 2])
         for i in range(max(sents) + 1):
             sent = sent_file.readline()[:-1]
-            if i in sents:
-                result[i] = encode(self.tokenizer, sent, add_eos=True, add_prefix_space=True)
-        return result
+            if i in sents and i not in self.sent_data:
+                self.sent_data[i] = encode(self.tokenizer, sent, add_eos=True, add_prefix_space=True)
+        return self.sent_data
 
     def get_loaded_length(self):
         return IdxDataset.get_loaded_length(self), len(self.sent_data)
@@ -178,27 +133,26 @@ class IdxTextDataset(IdxDataset):
 
 class IdxEntityDataset(IdxDataset):
 
-    def __init__(self, tokenizer, idx_file=None, ent_file=None, total_len=512, data=None, eval_size=0, **kwargs):
-        super(IdxEntityDataset, self).__init__(tokenizer, idx_file=idx_file, total_len=total_len, eval_size=eval_size,
-                                               data=data, **kwargs)
+    def __init__(self, tokenizer, idx_file=None, ent_file=None, batch_len=100, data=None, **kwargs):
+        super(IdxEntityDataset, self).__init__(tokenizer, idx_file=idx_file, batch_len=batch_len, data=data, **kwargs)
+        self.ent_data = {}
         if data is not None and 'ent' in data:
             self.ent_data = data['ent']
             all_ents = self.data[:, [0, 1]].reshape(1, -1).squeeze()
             if not all(x in data['ent'] for x in all_ents):
                 print('Not all entity in idx exists in ent')
-                self.ent_data = self.load_ent(ent_file)
+                self.load_ent(ent_file)
         else:
-            self.ent_data = self.load_ent(ent_file)
+            self.load_ent(ent_file)
 
     def load_ent(self, ent_file):
         print('loading entities', ent_file.name)
-        result = {}
         ents = set(self.data[:, [0, 1]].reshape(1, -1).squeeze())
         for i in range(max(ents) + 1):
             ent = ent_file.readline()[:-1]
-            if i in ents:
-                result[i] = ent
-        return result
+            if i in ents and i not in self.ent_data:
+                self.ent_data[i] = ent
+        return self.ent_data
 
     def get_loaded_length(self):
         return IdxDataset.get_loaded_length(self), len(self.ent_data)
@@ -215,15 +169,13 @@ class IdxEntityDataset(IdxDataset):
 
 class IdxFullDataset(IdxEntityDataset, IdxTextDataset):
 
-    def __init__(self, tokenizer, idx_file=None, ent_file=None, sent_file=None, total_len=512, data=None, eval_size=0,
-                 **kwargs):
-        super(IdxFullDataset, self).__init__(tokenizer, total_len=total_len, eval_size=eval_size, idx_file=idx_file,
-                                             ent_file=ent_file, sent_file=sent_file, data=data, **kwargs)
+    def __init__(self, tokenizer, idx_file=None, ent_file=None, sent_file=None, batch_len=100, data=None, **kwargs):
+        super(IdxEntityDataset, self).__init__(tokenizer, idx_file=idx_file, ent_file=ent_file, sent_file=sent_file,
+                                               batch_len=batch_len, data=data, **kwargs)
 
     def __getitem__(self, item):
         e1, e2, eidx = IdxEntityDataset.__getitem__(self, item)
         sent, senti = IdxTextDataset.__getitem__(self, item)
-        # print(e1, e2, sent)
         e1, e2 = self.unify_entity(e1, sent, senti), self.unify_entity(e2, sent, senti)
         sent, senti = IdxTextDataset.__getitem__(self, item)
         return e1, e2, sent, (*eidx, senti)

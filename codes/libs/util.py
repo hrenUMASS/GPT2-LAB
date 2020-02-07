@@ -1,14 +1,18 @@
-import time
+import inspect
 import traceback
 from typing import Sequence
 
 import numpy as np
+import torch
 import torch.nn.functional as F
 from torch import nn
 
 from . import loggers
-from .global_constants import *
-from .loggers import log_info, cuda_mem_in_mb
+from .loggers import log_info
+
+
+def get_column(arr, index):
+    return [item[index] for item in arr]
 
 
 def top_k_top_p_filtering(logits, top_k=0, top_p=0.0, filter_value=-float('Inf')):
@@ -43,10 +47,12 @@ def top_k_top_p_filtering(logits, top_k=0, top_p=0.0, filter_value=-float('Inf')
 
 
 def sample_sequence(model, length, e1, e2, num_samples=1, temperature=1, top_k=0, top_p=0.0, repetition_penalty=1.0):
+    generated = torch.zeros(num_samples, 0).long().cuda()
+    if len(e1) + len(e2) > length:
+        return generated
     e1, e2 = torch.tensor(e1, dtype=torch.long).cuda(), torch.tensor(e2, dtype=torch.long).cuda()
     e1, e2 = e1.unsqueeze(0).repeat(num_samples, 1), e2.unsqueeze(0).repeat(num_samples, 1)
-    generated = torch.zeros(num_samples, 0).long().cuda()
-    data = {'e1': e1, 'e2': e2, 'sent': generated}
+    data = {'e1': e1, 'e2': e2}
     with torch.no_grad():
         for _ in range(length):
 
@@ -66,6 +72,7 @@ def sample_sequence(model, length, e1, e2, num_samples=1, temperature=1, top_k=0
                 next_token = torch.multinomial(F.softmax(filtered_logits, dim=-1), num_samples=1)
 
             generated = torch.cat((generated, next_token), dim=1)
+            data['sent'] = generated
     return generated
 
 
@@ -103,6 +110,7 @@ def encode(tokenizer, elem, add_eos=False, **kwargs):
 
 
 def get_tensor_batch(batch, batch_size=32, max_len=512):
+    from global_constants import eos_id, ignore_index
     if all([x.shape[0] == 0 for x in batch]):
         batch = eos_id + torch.zeros(batch_size, 1, dtype=torch.long)
         labels = ignore_index * torch.ones(*batch.shape, dtype=torch.long)
@@ -124,7 +132,7 @@ def get_tensor_batch(batch, batch_size=32, max_len=512):
         # print('sent:{}'.format(sent), sent.shape)
         batch[i] = torch.cat((sent, torch.zeros(max_len - sent.shape[0], dtype=torch.long) + eos_id), dim=0)
         labels[i] = torch.cat((sent, torch.ones(max_len - sent.shape[0], dtype=torch.long) * ignore_index), dim=0)
-    return torch.stack(batch), labels, attn_mask
+    return {'input_ids': torch.stack(batch), 'labels': labels, 'attention_mask': attn_mask}
 
 
 def cat_tensors(tensor_list, padding=0):
@@ -158,6 +166,7 @@ def pos_id(length):
 
 
 def process_re_data(data):
+    from global_constants import eos_id, ignore_index
     e1_ids, e2_ids = data['e1'], data['e2']
     input_ids = data.get('sent', None)
 
@@ -200,17 +209,15 @@ def process_re_data(data):
             'labels': labels}
 
 
-def get_re_data(data, max_len=np.inf, train=True, batch_size=32):
+def get_re_data(data, max_len=np.inf, batch_size=32):
     empty = torch.zeros(0, dtype=torch.long)
     e1_data, e2_data = [], []
     sent_data = []
     for x in data:
         if len(data[0]) > 2:
             sent = x[2]
-            # print('Testing entities in sentence')
-            # print(x[0], x[1], x[2].shape)
             failed = False
-            if not (in_tensor(sent, x[0]) and in_tensor(sent, x[1])) and train:
+            if not (in_tensor(sent, x[0]) and in_tensor(sent, x[1])):
                 print('Entity not in sentence\ne1={}\ne2={}\nsent={}\nidx={}'.format(x[0], x[1], sent, x[3]))
                 failed = True
             failed |= (x[0].shape[0] < 1 or x[1].shape[0] < 1)
@@ -240,13 +247,13 @@ def get_re_data(data, max_len=np.inf, train=True, batch_size=32):
         e2_data.extend([empty] * rm_len)
         sent_data.extend([empty] * rm_len)
     result = {'e1': e1_data, 'e2': e2_data}
-    print(len(sent_data), len(e1_data))
     if len(sent_data) == len(e1_data):
         result.update({'sent': sent_data})
     return result
 
 
 def get_model_output(model, data):
+    from global_constants import main_device
     # device = torch.device('cuda:0')
     for i in data:
         data[i] = data[i].to(main_device)
@@ -260,78 +267,6 @@ def get_model_output(model, data):
         print([x.device for x in data.values()])
         print(traceback.print_exc())
         exit()
-
-
-def train_one_epoch(dataloader, model, optimizer, scheduler, data_process_func):
-    losses = []
-    # print(len(dataloader))
-    cuda_logger, train_logger = loggers.cuda_logger, loggers.train_logger
-    for step, raw in enumerate(dataloader):
-        step_time = time.time()
-        data = data_process_func(raw)
-        log_info(cuda_logger,
-                 'Allocated batches {}, {}'.format(cuda_mem_in_mb(), {k: v.shape for k, v in data.items()}))
-        loss = get_model_output(model, data)[0].mean()
-        # loss = torch.tensor([0], requires_grad=True, dtype=torch.float) * torch.tensor([1], requires_grad=True,
-        # dtype = torch.float)
-        loss_value = loss.item()
-        # if len(losses) > 0 and abs(loss_value - losses[-1]) > 0.5:
-        #     log_info(loggers[2], 'Huge Loss Change Detected {}\n{}'.format(loss_value - losses[-1], raw))
-        # continue
-        loss.backward()
-        nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-        optimizer.step()
-        scheduler.step()
-        model.zero_grad()
-        losses.append(loss_value)
-        log_info(train_logger, '{} Iter Loss {} Time {}'.format(step, loss_value, time.time() - step_time))
-
-    return losses, loss
-
-
-def eval_one_epoch(dataloader, model, eval_loss, eval_steps, data_process_func):
-    # print(len(dataloader))
-    losses, perplexities = [], []
-    cuda_logger, eval_logger = loggers.cuda_logger, loggers.validation_logger
-    for step, raw in enumerate(dataloader):
-        step_time = time.time()
-        data = data_process_func(raw)
-        log_info(cuda_logger,
-                 'Allocated batches {}, {}'.format(cuda_mem_in_mb(), {k: v.shape for k, v in data.items()}))
-        with torch.no_grad():
-            loss = get_model_output(model, data)[0].mean()
-            loss_value = loss.item()
-        eval_loss += loss_value
-        eval_steps += 1
-        perplex_value = torch.exp(torch.tensor(eval_loss / eval_steps)).item()
-        perplexities.append(perplex_value)
-        losses.append(loss_value)
-        log_info(eval_logger, '{} Iter Loss {} Perplexity {} Time {}'.format(step, loss_value, perplex_value,
-                                                                             time.time() - step_time))
-    return losses, perplexities, eval_loss, eval_steps
-
-
-def sampling_one_epoch(dataloader, model, length, num_samples, data_process_func, tokenizer=None):
-    sample_logger, cuda_logger = loggers.sample_logger, loggers.cuda_logger
-    ratios = []
-    ent_set = set()
-    for step, raw in enumerate(dataloader):
-        step_time = time.time()
-        data = data_process_func(raw[0])
-        idx = data['idx']
-        if idx not in ent_set and idx[::-1] not in ent_set:
-            e1, e2 = data['e1'], data['e2']
-            e1b = encode(tokenizer, e1) if isinstance(e1, str) else e1
-            e2b = encode(tokenizer, e2) if isinstance(e2, str) else e2
-            sents = sample_sequence(model, length, e1b, e2b, num_samples=num_samples)
-            in_sent = 0
-            for i in range(sents.shape[0]):
-                if in_tensor(sents[i], e1) and in_tensor(sents[i], e2):
-                    in_sent += 1
-            ratio = in_sent / sents.shape[0]
-            ratios.append((e1, e2, ratio))
-            log_info(sample_logger, 'e1 {} e2 {} ratio {} time {}'.format(e1, e2, ratio, time.time() - step_time))
-            ent_set.add((e1, e2))
 
 
 def save_checkpoint(save_path, model, epoch, mini_epoch, optimizer, scheduler, loss):
@@ -358,8 +293,26 @@ def load_checkpoint(save_path, model_cls=None, optim_cls=None, sche_cls=None, mo
     return epoch, mini_epoch, model, optimizer, scheduler, loss
 
 
+def get_params(config, func):
+    return {k.name: v for k, v in config.items() if
+            k.name in inspect.signature(func).parameters.keys()}
+
+
 def get_dict(d, item, default):
     prepare_logger = loggers.prepare_logger
     if item not in d:
         log_info(prepare_logger, 'item {} not in config, using default {}'.format(item, default))
     return d.get(item, default)
+
+
+def get_config(config, item):
+    from global_constants import default_values
+    prepare_logger = loggers.prepare_logger
+    if item not in config:
+        if item not in default_values:
+            log_info(prepare_logger, 'item {} not in config and default, using None'.format(item))
+            return None
+        default = default_values[item]
+        log_info(prepare_logger, 'item {} not in config, using default {}'.format(item, default))
+        return default
+    return config[item]

@@ -7,12 +7,36 @@ import transformers as tfm
 from torch import nn
 from torch.utils.data import DataLoader
 
-from . import loggers
-from .loggers import log_info
-from .util import train_one_epoch, get_module_from_parallel, save_checkpoint, load_checkpoint
+from libs import get_module_from_parallel, save_checkpoint, load_checkpoint, get_model_output
+from libs import log_info, cuda_mem_in_mb
+from libs import loggers
 
 
-def train(model, dataset, batch_size, epochs, epoch_iter, learning_rate=1e-2, weight_decay=1e-4, n_gpus=1,
+def train_one_epoch(dataloader, model, optimizer, scheduler, data_process_func):
+    losses = []
+    cuda_logger, train_logger = loggers.cuda_logger, loggers.train_logger
+    loss = None
+    for step, raw in enumerate(dataloader):
+        step_time = time.time()
+        data = data_process_func(raw)
+        log_info(cuda_logger,
+                 'Allocated batches {}, {}'.format(cuda_mem_in_mb(), {k: v.shape for k, v in data.items()}))
+        loss = get_model_output(model, data)[0].mean()
+        loss_value = loss.item()
+        # if len(losses) > 0 and abs(loss_value - losses[-1]) > 0.5:
+        #     log_info(loggers[2], 'Huge Loss Change Detected {}\n{}'.format(loss_value - losses[-1], raw))
+        loss.backward()
+        nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        optimizer.step()
+        scheduler.step()
+        model.zero_grad()
+        losses.append(loss_value)
+        log_info(train_logger, '{} Iter Loss {} Time {}'.format(step, loss_value, time.time() - step_time))
+
+    return losses, loss
+
+
+def train(model, dataset, batch_size, epochs, epoch_iter, learning_rate=1e-2, weight_decay=1e-4,
           save_path=None, from_checkpoint=False, continue_train=False, tokenizer=None, data_func=lambda x: x):
     loss_logger, train_logger = loggers.loss_logger, loggers.train_logger
     no_decay = ['bias', 'LayerNorm.weight']
@@ -32,10 +56,8 @@ def train(model, dataset, batch_size, epochs, epoch_iter, learning_rate=1e-2, we
     # gpu = GPUtil.getGPUs()[0]
     # n = max(len(dataset) // 9000, 1)
     n = 5
-    datasets = dataset.split(n)
-    data_loaders = [DataLoader(i, shuffle=False, batch_size=batch_size, collate_fn=lambda x: x) for i in datasets]
-    print([k.get_loaded_length() for k in datasets])
-    mini_epoch = 0
+    dataset = dataset.split(n)
+    data_loader = DataLoader(dataset, shuffle=False, batch_size=batch_size, collate_fn=lambda x: x)
     if from_checkpoint:
         epoch, mini_epoch, model_state, optimizer_state, scheduler_state, loss = load_checkpoint(
             save_path + 'checkpoint.pt')
@@ -48,16 +70,15 @@ def train(model, dataset, batch_size, epochs, epoch_iter, learning_rate=1e-2, we
     model.train()
     for e in range(epochs):
         epoch_start = time.time()
-        for ed, data_loader in enumerate(data_loaders[mini_epoch:]):
-            mini_epoch = 0
+        for ed, data_loader in enumerate(data_loader):
             loss_value, loss = train_one_epoch(data_loader, model, optimizer, scheduler, data_process_func=data_func)
             losses.extend(loss_value)
             if save_path is not None:
                 get_module_from_parallel(model).save_pretrained(save_path)
                 if tokenizer is not None:
                     tokenizer.save_pretrained(save_path)
-                save_checkpoint(save_path + 'checkpoint.pt', model, e, ed + mini_epoch, optimizer, scheduler, loss)
-                log_info(loss_logger, 'saved models for mini epoch {} in epoch {}'.format(ed + mini_epoch, e))
+                save_checkpoint(save_path + 'checkpoint.pt', model, e, ed, optimizer, scheduler, loss)
+                log_info(loss_logger, 'saved models for mini epoch {} in epoch {}'.format(ed, e))
         loss_seg = losses[e * epoch_iter:]
         log_info(train_logger, '-' * 50)
         log_info(train_logger, 'Epoch {}, Mean Loss {}, Min Loss {}'.format(e, np.mean(loss_seg), np.min(loss_seg)))
