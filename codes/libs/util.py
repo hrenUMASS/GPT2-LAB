@@ -4,7 +4,6 @@ from typing import Sequence
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 from torch import nn
 
 from . import loggers
@@ -15,74 +14,16 @@ def get_column(arr, index):
     return [item[index] for item in arr]
 
 
-def top_k_top_p_filtering(logits, top_k=0, top_p=0.0, filter_value=-float('Inf')):
-    """ Filter a distribution of logits using top-k and/or nucleus (top-p) filtering
-        Args:
-            logits: logits distribution shape (batch size x vocabulary size)
-            top_k > 0: keep only top k tokens with highest probability (top-k filtering).
-            top_p > 0.0: keep the top tokens with cumulative probability >= top_p (nucleus filtering).
-                Nucleus filtering is described in Holtzman et al. (http://arxiv.org/abs/1904.09751)
-        From: https://gist.github.com/thomwolf/1a5a29f6962089e871b94cbd09daf317
-    """
-    top_k = min(top_k, logits.size(-1))  # Safety check
-    if top_k > 0:
-        # Remove all tokens with a probability less than the last token of the top-k
-        indices_to_remove = logits < torch.topk(logits, top_k)[0][..., -1, None]
-        logits[indices_to_remove] = filter_value
-
-    if top_p > 0.0:
-        sorted_logits, sorted_indices = torch.sort(logits, descending=True)
-        cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
-
-        # Remove tokens with cumulative probability above the threshold
-        sorted_indices_to_remove = cumulative_probs > top_p
-        # Shift the indices to the right to keep also the first token above the threshold
-        sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
-        sorted_indices_to_remove[..., 0] = 0
-
-        # scatter sorted tensors to original indexing
-        indices_to_remove = sorted_indices_to_remove.scatter(dim=1, index=sorted_indices, src=sorted_indices_to_remove)
-        logits[indices_to_remove] = filter_value
-    return logits
-
-
-def sample_sequence(model, length, e1, e2, num_samples=1, temperature=1, top_k=0, top_p=0.0, repetition_penalty=1.0):
-    generated = torch.zeros(num_samples, 0).long().cuda()
-    if len(e1) + len(e2) > length:
-        return generated
-    e1, e2 = torch.tensor(e1, dtype=torch.long).cuda(), torch.tensor(e2, dtype=torch.long).cuda()
-    e1, e2 = e1.unsqueeze(0).repeat(num_samples, 1), e2.unsqueeze(0).repeat(num_samples, 1)
-    data = {'e1': e1, 'e2': e2}
-    with torch.no_grad():
-        for _ in range(length):
-
-            inputs = process_re_data(data)
-            outputs = get_model_output(model, inputs)
-            next_token_logits = outputs[1][:, -1, :] / (temperature if temperature > 0 else 1.)
-
-            # repetition penalty from CTRL (https://arxiv.org/abs/1909.05858)
-            for i in range(num_samples):
-                for _ in set(generated[i].tolist()):
-                    next_token_logits[i, _] /= repetition_penalty
-
-            filtered_logits = top_k_top_p_filtering(next_token_logits, top_k=top_k, top_p=top_p)
-            if temperature == 0:  # greedy sampling:
-                next_token = torch.argmax(filtered_logits, dim=-1).unsqueeze(-1)
-            else:
-                next_token = torch.multinomial(F.softmax(filtered_logits, dim=-1), num_samples=1)
-
-            generated = torch.cat((generated, next_token), dim=1)
-            data['sent'] = generated
-    return generated
-
-
-def get_index(ori, cmp):
+def get_index(ori, comp):
+    # print('index', ori, comp)
+    if ori.shape[0] < comp.shape[0]:
+        return -1
     index = -1
-    for i in range(ori.shape[0]):
-        if ori[i] == cmp[0]:
+    for i in range(ori.shape[0] - comp.shape[0] + 1):
+        if ori[i] == comp[0]:
             index = i
-            for j in range(cmp.shape[0]):
-                if ori[index + j] != cmp[j]:
+            for j in range(comp.shape[0]):
+                if ori[i + j] != comp[j]:
                     index = -1
                     break
             if index != -1:
@@ -98,8 +39,10 @@ def in_tensor(ori, dst):
 
 
 def encode(tokenizer, elem, add_eos=False, **kwargs):
+    # print(elem)
     if isinstance(elem, str):
         result = tokenizer.encode(elem, return_tensors='pt', **kwargs).long()
+        # print(result)
         if len(result.shape) > 1:
             result = result[0]
         if add_eos:
@@ -110,28 +53,37 @@ def encode(tokenizer, elem, add_eos=False, **kwargs):
 
 
 def get_tensor_batch(batch, batch_size=32, max_len=512):
+    if isinstance(batch, dict):
+        batch = batch['sent']
     from global_constants import eos_id, ignore_index
+    device = batch.device
+    if len(batch.shape) == 1:
+        batch = batch.unsequeeze(0)
     if all([x.shape[0] == 0 for x in batch]):
-        batch = eos_id + torch.zeros(batch_size, 1, dtype=torch.long)
-        labels = ignore_index * torch.ones(*batch.shape, dtype=torch.long)
-        attn_mask = torch.zeros(*batch.shape, dtype=torch.long)
-        return batch, labels, attn_mask
+        batch = eos_id + torch.zeros(batch_size, 1, dtype=torch.long, device=device)
+        labels = ignore_index * torch.ones(*batch.shape, dtype=torch.long, device=device)
+        attn_mask = torch.zeros(*batch.shape, dtype=torch.long, device=device)
+        return {'input_ids': batch, 'labels': labels, 'attention_mask': attn_mask}
 
     # print(batch)
     # print('batch1:{}'.format(batch), [x.shape for x in batch])
     max_len = min(max(batch, key=lambda x: x.shape[-1]).shape[-1], max_len)
-    attn_mask = torch.ones(batch_size, max_len, dtype=torch.float16)
-    labels = torch.zeros(batch_size, max_len, dtype=torch.long)
+    attn_mask = torch.ones(batch_size, max_len, dtype=torch.float16, device=device)
+    labels = torch.zeros(batch_size, max_len, dtype=torch.long, device=device)
     batch = [x[0] if len(x.shape) > 1 else x for x in batch]
     # print('batch2:{}'.format(batch), [x.shape for x in batch])
     for i in range(batch_size):
         if i >= len(batch):
-            batch.append(eos_id + torch.zeros(1, dtype=torch.long))
+            batch.append(eos_id + torch.zeros(1, dtype=torch.long, device=device))
         sent = batch[i]
         attn_mask[i, len(sent):max_len] = 0
         # print('sent:{}'.format(sent), sent.shape)
-        batch[i] = torch.cat((sent, torch.zeros(max_len - sent.shape[0], dtype=torch.long) + eos_id), dim=0)
-        labels[i] = torch.cat((sent, torch.ones(max_len - sent.shape[0], dtype=torch.long) * ignore_index), dim=0)
+        batch[i] = torch.cat(
+            (sent,
+             torch.zeros(max_len - sent.shape[0], dtype=torch.long, device=device) + eos_id), dim=0)
+        labels[i] = torch.cat(
+            (sent,
+             torch.ones(max_len - sent.shape[0], dtype=torch.long, device=device) * ignore_index), dim=0)
     return {'input_ids': torch.stack(batch), 'labels': labels, 'attention_mask': attn_mask}
 
 
@@ -169,7 +121,6 @@ def process_re_data(data):
     from global_constants import eos_id, ignore_index
     e1_ids, e2_ids = data['e1'], data['e2']
     input_ids = data.get('sent', None)
-
     result_ids = []
     tokens = []
     attns = []
@@ -185,7 +136,7 @@ def process_re_data(data):
         pos = torch.cat((e1p, e2p))
         attn = torch.cat((e1a, e2a))
         lab = torch.cat((e1, e2))
-        if input_ids is not None and input_ids.shape[0] > 0:
+        if input_ids is not None and len(input_ids) > 0:
             in_ids = input_ids[i]
             inl = in_ids.shape[0]
             inp = pos_id(inl)
@@ -205,6 +156,8 @@ def process_re_data(data):
     tokens = cat_tensors(tokens, padding=2)
     attns = cat_tensors(attns)
     labels = cat_tensors(labels, padding=ignore_index)
+    if result_ids.shape[1] == 0:
+        return None
     return {'input_ids': result_ids, 'attention_mask': attns, 'token_type_ids': tokens, 'position_ids': poses,
             'labels': labels}
 
@@ -213,14 +166,15 @@ def get_re_data(data, max_len=np.inf, batch_size=32):
     empty = torch.zeros(0, dtype=torch.long)
     e1_data, e2_data = [], []
     sent_data = []
+    # print('idx', [x[-1] for x in data])
     for x in data:
-        if len(data[0]) > 2:
+        if len(data[0]) > 3:
             sent = x[2]
-            failed = False
-            if not (in_tensor(sent, x[0]) and in_tensor(sent, x[1])):
-                print('Entity not in sentence\ne1={}\ne2={}\nsent={}\nidx={}'.format(x[0], x[1], sent, x[3]))
-                failed = True
-            failed |= (x[0].shape[0] < 1 or x[1].shape[0] < 1)
+            # failed = False
+            # if not (in_tensor(sent, x[0]) and in_tensor(sent, x[1])):
+            #     print('Entity not in sentence\ne1={}\ne2={}\nsent={}\nidx={}'.format(x[0], x[1], sent, x[-1]))
+            #     failed = True
+            failed = (x[0].shape[0] < 1 or x[1].shape[0] < 1)
             if failed:
                 sent_data.append(empty)
                 e1_data.append(empty)
@@ -229,8 +183,7 @@ def get_re_data(data, max_len=np.inf, batch_size=32):
             adj_max_len = max_len - x[0].shape[0] - x[1].shape[0]
             if sent.shape[0] > adj_max_len:
                 ei = max(get_index(sent, x[0]) + x[0].shape[0], get_index(sent, x[1]) + x[1].shape[0])
-                print('ei index {}'.format(ei))
-
+                # print('ei index {}'.format(ei))
                 if ei > adj_max_len:
                     sent_data.append(empty)
                     e1_data.append(empty)
@@ -246,7 +199,7 @@ def get_re_data(data, max_len=np.inf, batch_size=32):
         e1_data.extend([empty] * rm_len)
         e2_data.extend([empty] * rm_len)
         sent_data.extend([empty] * rm_len)
-    result = {'e1': e1_data, 'e2': e2_data}
+    result = {'e1': e1_data, 'e2': e2_data, 'idx': [x[-1] for x in data]}
     if len(sent_data) == len(e1_data):
         result.update({'sent': sent_data})
     return result
@@ -269,9 +222,8 @@ def get_model_output(model, data):
         exit()
 
 
-def save_checkpoint(save_path, model, epoch, mini_epoch, optimizer, scheduler, loss):
-    check_point = {'epoch': epoch, 'mini_epoch': mini_epoch, 'model_state': model.state_dict(),
-                   'optimizer_state': optimizer.state_dict(), 'scheduler_state': scheduler.state_dict(), 'loss': loss}
+def save_checkpoint(save_path, check_point):
+    check_point = {k: v.state_dict() if hasattr(v, 'state_dict') else v for k, v in check_point.items()}
     torch.save(check_point, save_path)
 
 
@@ -283,14 +235,13 @@ def load_checkpoint(save_path, model_cls=None, optim_cls=None, sche_cls=None, mo
     scheduler = check_point['scheduler_state']
     loss = check_point['loss']
     epoch = check_point['epoch']
-    mini_epoch = check_point['mini_epoch']
     if model_cls is not None:
         model = model_cls(**(model_param or {})).load_state_dict(model)
     if optim_cls is not None:
         optimizer = optim_cls(**(optim_param or {})).load_state_dict(optimizer)
     if sche_cls is not None:
         scheduler = sche_cls(**(sche_param or {})).load_state_dict(scheduler)
-    return epoch, mini_epoch, model, optimizer, scheduler, loss
+    return epoch, model, optimizer, scheduler, loss
 
 
 def get_params(config, func):
@@ -316,3 +267,8 @@ def get_config(config, item):
         log_info(prepare_logger, 'item {} not in config, using default {}'.format(item, default))
         return default
     return config[item]
+
+
+def del_key(d, k):
+    if k in d:
+        del d[k]

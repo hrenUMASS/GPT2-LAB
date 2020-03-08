@@ -18,7 +18,14 @@ def train_one_epoch(dataloader, model, optimizer, scheduler, data_process_func):
     loss = None
     for step, raw in enumerate(dataloader):
         step_time = time.time()
+        # print(raw)
+        # print(inspect.getsource(data_process_func))
+        # print(raw)
         data = data_process_func(raw)
+        if data is None:
+            log_info(cuda_logger, 'Empty data {} Iter'.format(step))
+            continue
+        # print(data)
         log_info(cuda_logger,
                  'Allocated batches {}, {}'.format(cuda_mem_in_mb(), {k: v.shape for k, v in data.items()}))
         loss = get_model_output(model, data)[0].mean()
@@ -55,9 +62,7 @@ def train(model, dataset, batch_size, epochs, epoch_iter, learning_rate=1e-2, we
     losses = []
     # gpu = GPUtil.getGPUs()[0]
     # n = max(len(dataset) // 9000, 1)
-    n = 5
-    dataset = dataset.split(n)
-    data_loader = DataLoader(dataset, shuffle=False, batch_size=batch_size, collate_fn=lambda x: x)
+    # print(batch_size)
     if from_checkpoint:
         epoch, mini_epoch, model_state, optimizer_state, scheduler_state, loss = load_checkpoint(
             save_path + 'checkpoint.pt')
@@ -69,16 +74,23 @@ def train(model, dataset, batch_size, epochs, epoch_iter, learning_rate=1e-2, we
     model = nn.DataParallel(model)
     model.train()
     for e in range(epochs):
+        data_loader = DataLoader(dataset, shuffle=False, batch_size=batch_size, collate_fn=lambda x: x)
         epoch_start = time.time()
-        for ed, data_loader in enumerate(data_loader):
-            loss_value, loss = train_one_epoch(data_loader, model, optimizer, scheduler, data_process_func=data_func)
-            losses.extend(loss_value)
-            if save_path is not None:
-                get_module_from_parallel(model).save_pretrained(save_path)
-                if tokenizer is not None:
-                    tokenizer.save_pretrained(save_path)
-                save_checkpoint(save_path + 'checkpoint.pt', model, e, ed, optimizer, scheduler, loss)
-                log_info(loss_logger, 'saved models for mini epoch {} in epoch {}'.format(ed, e))
+        loss_value, loss = train_one_epoch(data_loader, model, optimizer, scheduler, data_process_func=data_func)
+        losses.extend(loss_value)
+        if save_path is not None:
+            get_module_from_parallel(model).save_pretrained(save_path)
+            if tokenizer is not None:
+                tokenizer.save_pretrained(save_path)
+            check_point = {
+                'model': model,
+                'epoch': e,
+                'optimizer': optimizer,
+                'scheduler': scheduler,
+                'loss': loss
+            }
+            save_checkpoint(save_path + 'checkpoint.pt', check_point)
+            log_info(loss_logger, 'saved models for in epoch {}'.format(e))
         loss_seg = losses[e * epoch_iter:]
         log_info(train_logger, '-' * 50)
         log_info(train_logger, 'Epoch {}, Mean Loss {}, Min Loss {}'.format(e, np.mean(loss_seg), np.min(loss_seg)))
