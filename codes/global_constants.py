@@ -66,6 +66,7 @@ class ConfigEnums(Enum):
     db_path = 'db_path'
     ids = 'ids'
     indexer_type = 'indexer_type'
+    batch_len_size = 'batch_len_size'
 
 
 _ce = ConfigEnums
@@ -93,19 +94,20 @@ class TrainModesEnums(Enum):
     train_eval = ModeParam(single_train,
                            _ce.mode, _ce.model, _ce.load_path, _ce.save_path, _ce.save_model, _ce.idx_path,
                            _ce.sent_path, _ce.ent_path, _ce.sent_index_path, _ce.ent_index_path, _ce.idx_index_path,
-                           _ce.db_path, _ce.ids, _ce.indexer_type,
+                           _ce.db_path, _ce.ids, _ce.indexer_type, _ce.batch_len_size,
                            _ce.dataset_type, _ce.loaders, _ce.batch_len, _ce.eval_len, _ce.epochs, _ce.batch_size,
                            _ce.learning_rate, _ce.weight_decay, _ce.max_len,
                            _ce.from_checkpoint, _ce.continue_train, _ce.data)
     eval_sequences = ModeParam(single_sequence_generation,
-                               _ce.mode, _ce.model, _ce.load_path, _ce.save_path, _ce.idx_path, _ce.sent_path,
+                               _ce.mode, _ce.gpt2, _ce.model, _ce.load_path, _ce.save_path, _ce.idx_path, _ce.sent_path,
                                _ce.ent_path, _ce.idx_index_path, _ce.sent_index_path, _ce.ent_index_path, _ce.ent_data,
-                               _ce.db_path, _ce.ids, _ce.indexer_type,
+                               _ce.db_path, _ce.ids, _ce.indexer_type, _ce.batch_len_size, _ce.tokenizer,
                                _ce.dataset_type, _ce.loaders, _ce.batch_len, _ce.max_len, _ce.num_samples,
                                _ce.from_checkpoint, _ce.continue_train, _ce.data)
     gpt2_model_eval = ModeParam(gpt2_model_eval, _ce.mode, _ce.model, _ce.load_path, _ce.save_path, _ce.idx_path,
                                 _ce.sent_path, _ce.ent_path, _ce.idx_index_path, _ce.sent_index_path, _ce.db_path,
                                 _ce.ent_index_path, _ce.ent_data, _ce.gpt2, _ce.ids, _ce.indexer_type,
+                                _ce.batch_len_size,
                                 _ce.dataset_type, _ce.loaders, _ce.batch_len, _ce.max_len,
                                 _ce.from_checkpoint, _ce.continue_train, _ce.data)
 
@@ -137,7 +139,12 @@ data_process_func = {
     _tme.eval_sequences: {
         _me.GPT2LMREModel: {
             _de.idxEnts: lambda max_len=np.inf, batch_size=1: (lambda x: {'e1': x[0], 'e2': x[1], 'idx': x[-1]}),
-            _de.idxFull: lambda max_len=np.inf, batch_size=1: (lambda x: {'e1': x[0], 'e2': x[1], 'idx': x[-1]})
+            _de.idxFull: lambda max_len=np.inf, batch_size=32: (
+                lambda x: libs.get_re_data(x, max_len=max_len, batch_size=batch_size)
+            ),
+            _de.idxDBFull: lambda max_len=np.inf, batch_size=32: (
+                lambda x: libs.get_re_data(x, max_len=max_len, batch_size=batch_size)
+            )
         }
     },
     _tme.gpt2_model_eval: {
@@ -178,5 +185,6 @@ default_values = {
     _ce.from_checkpoint: False,
     _ce.db_path: self_data_path + 'wiki2016.db',
     _ce.ids: self_data_path + 'rexT/filtered.json',
-    _ce.indexer_type: 'idxDefaultIndexer'
+    _ce.indexer_type: 'idxDefaultIndexer',
+    _ce.batch_len_size: 3200
 }

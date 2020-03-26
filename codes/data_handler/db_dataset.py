@@ -27,7 +27,7 @@ class IdxFullDBDataset(Dataset):
                                             (start_id, batch_len * 3200)).fetchall()
         self.data = np.array(self.data)
         eids = set(self.data[:, [0, 1]].reshape(-1, 1).squeeze(1))
-        print(max(eids))
+        # print(max(eids))
         # print(eids)
         if data is not None and 'ent' in data:
             self.ent_data = data['ent']
@@ -36,7 +36,7 @@ class IdxFullDBDataset(Dataset):
             self.ent_data = {e[0]: e[1] for e in self.ent_data}
             # print(self.ent_data)
         sids = set(self.data[:, 2])
-        print(max(sids))
+        # print(max(sids))
         # print(sids)
         if data is not None and 'sent' in data:
             self.sent_data = data['sent']

@@ -1,43 +1,59 @@
 import time
 
 import numpy as np
+import pandas as pd
 import torch
 from torch.utils.data import DataLoader
 
-from libs import get_model_output, in_tensor, encode, process_re_data
+from libs import get_column
+from libs import get_model_output, in_tensor, process_re_data
 from libs import log_info, cuda_mem_in_mb
 from libs import loggers
 from .sequence_sampling import sample_sequence_entity, get_seq_prob
 
 
-def sampling_one_epoch(dataloader, model, length, num_samples, data_process_func, tokenizer=None):
-    sample_logger, cuda_logger = loggers.sample_logger, loggers.cuda_logger
-    ratios = []
-    ent_set = set()
+def eval_prob_one_epoch(dataloader, gpt2, model, length, num_samples, data_process_func, tokenizer=None):
+    result = pd.DataFrame(columns=['e1', 'e2', 'sent', 'log_prod_prob', 'loss', 'sample_sent'])
+    sample_logger = loggers.sample_logger
+    max_sample = 32
+    divs = num_samples // max_sample
+    saps = [max_sample] * divs
+    saps.append(num_samples - divs * max_sample)
     for step, raw in enumerate(dataloader):
-        step_time = time.time()
-        data = data_process_func(raw[0])
-        idx = data['idx']
-        if idx not in ent_set and idx[::-1] not in ent_set:
-            e1, e2 = data['e1'], data['e2']
-            e1b = encode(tokenizer, e1) if isinstance(e1, str) else e1
-            e2b = encode(tokenizer, e2) if isinstance(e2, str) else e2
-            sents = sample_sequence_entity(model, length, e1b, e2b, num_samples=num_samples, top_k=5)
-            in_sent = 0
-            for i in range(sents.shape[0]):
-                if in_tensor(sents[i], e1) and in_tensor(sents[i], e2):
-                    in_sent += 1
-            ratio = in_sent / int(sents.shape[0])
-            ratios.append((e1, e2, ratio))
-            log_info(sample_logger, 'e1 {} e2 {} ratio {} time {}'.format(e1, e2, ratio, time.time() - step_time))
-            ent_set.add((e1, e2))
-    return ratios
+        data = data_process_func(raw)
+        for i in range(len(data['e1'])):
+            e1, e2 = data['e1'][i], data['e2'][i]
+            sents = []
+            sent = []
+            for ns in saps:
+                # print(length, ns)
+                sent_temp = sample_sequence_entity(model, length, e1, e2, num_samples=ns, top_k=5).cpu()
+                sent.append(sent_temp)
+            # print(sent)
+            for s in sent:
+                for l in range(s.shape[0]):
+                    # print(s[l])
+                    # print(tokenizer.decode(s[l].tolist()))
+                    if in_tensor(s[l], e1) and in_tensor(s[l], e2):
+                        sents.append(s[l])
+            # print(tokenizer.decode(e1.tolist()), tokenizer.decode(e2.tolist()))
+            sl = len(sents)
+            idx = data['idx'][i]
+            data = {'e1': [e1] * sl, 'e2': [e2] * sl, 'sent': sents, 'idx': [idx] * sl}
+            if sl > 0:
+                probs = get_seq_prob(gpt2, data, data_func=process_re_data)
+                data = {'e1': [idx[0]] * sl, 'e2': [idx[1]] * sl, 'sent': sents,
+                        'log_prod_prob': get_column(probs, 1), 'loss': get_column(probs, 2),
+                        'sample_sent': [idx[2]] * sl}
+                result = pd.concat([result, pd.DataFrame(data)])
+            log_info(sample_logger, 'Sampled {} sents for e1 {}, e2 {}'.format(len(sents), e1, e2))
+    return result
 
 
-def eval_sequences(model, dataset, num_samples, max_len, data_func=lambda x: x, tokenizer=None):
+def eval_sequences(gpt2, model, dataset, num_samples, max_len, data_func=lambda x: x, tokenizer=None):
     sample_logger = loggers.sample_logger
     data_loader = DataLoader(dataset, shuffle=False, batch_size=1, collate_fn=lambda x: x)
-    ratios = sampling_one_epoch(data_loader, model, max_len, num_samples, data_func, tokenizer=tokenizer)
+    ratios = eval_prob_one_epoch(data_loader, gpt2, model, max_len, num_samples, data_func, tokenizer=tokenizer)
     log_info(sample_logger, 'Total ratio {}'.format(np.mean(tuple(x[-1] for x in ratios))))
     return ratios
 
@@ -93,17 +109,18 @@ def gpt2_eval_one_epoch(dataloader, gpt2, model, data_func):
     ratio_prod, ratio_avg = [], []
     gpt2_prod, gpt2_avg = [], []
     for step, raw in enumerate(dataloader):
-        step_time = time.time()
+        # step_time = time.time()
         # print(raw)
         data = data_func(raw)
         # print(data)
         probs = get_seq_prob(model, data, data_func=process_re_data)
         # print(probs)
-        for idx, prob in probs.items():
+        for i in range(len(probs)):
             # ep = np.concatenate((prob[0], prob[1]))
-            ep = prob[1]
-            prob_avg = np.log(np.mean(ep))
-            prob_prod = np.sum(np.log(ep))
+            idx = data['idx'][i]
+            ep = probs[i][1]
+            prob_avg = np.log(np.mean(ep)).item()
+            prob_prod = np.mean(np.log(ep)).item()
             # print(prob_avg, prob_prod, type(prob_avg), np.array(prob_avg), np.array(idx), idx, type(idx))
             ratio_avg.append(np.append(np.array(idx), prob_avg))
             ratio_prod.append(np.append(np.array(idx), prob_prod))
@@ -111,17 +128,15 @@ def gpt2_eval_one_epoch(dataloader, gpt2, model, data_func):
         probs = get_seq_prob(gpt2, data, data_func=process_re_data)
         # print(probs)
 
-        for idx, prob in probs.items():
+        for i in range(len(probs)):
             # ep = np.concatenate((prob[0], prob[1]))
-            ep = prob[1]
+            idx = data['idx'][i]
+            ep = probs[i][1]
             prob_avg = np.log(np.mean(ep))
             prob_prod = np.sum(np.log(ep))
             gpt2_avg.append(np.append(np.array(idx), prob_avg))
             gpt2_prod.append(np.append(np.array(idx), prob_prod))
         dl = len(probs)
-        # log_info(sample_logger, 'RE Sample {}, ratio prod {}, {}, ratio mean {}, {}, time {}'.format(
-        #         #     list(data['idx']), ratio_prod[-dl:][-1], gpt2_prod[-dl:][-1], ratio_avg[-dl:][-1], gpt2_avg[-dl:][-1],
-        #         #     time.time() - step_time))
         log_info(sample_logger, 'RE Sample {} ratio prod {}, {}, ratio mean {}, {}'.format(
             dl, [x[-1] for x in ratio_prod[-dl:]], [x[-1] for x in gpt2_prod[-dl:]],
             [x[-1] for x in ratio_avg[-dl:]], [x[-1] for x in gpt2_avg[-dl:]]

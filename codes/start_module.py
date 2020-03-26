@@ -73,7 +73,7 @@ def start_func(config):
     con[ce.data_indexer] = data_indexer
     if ce.eval_len in con:
         con[ce.prev_eval_loss] = np.inf
-        con[ce.eval_len] = max(con[ce.eval_len], 1)
+        # con[ce.eval_len] = max(con[ce.eval_len], 1)
         eval_params = get_params(con, indexer_type.get_eval)
         print(eval_params)
         con[ce.evalset] = data_indexer.get_eval(**eval_params)
@@ -147,6 +147,7 @@ def single_sequence_generation(config, index):
     ce = ConfigEnums
     save_path = config[ce.save_path]
     config[ce.model] = config[ce.model].to(main_device)
+    config[ce.gpt2] = config[ce.gpt2].to(main_device)
     final_logger = loggers.final_logger
     eval_params = get_params(config, eval_sequences)
     ratios = eval_sequences(**eval_params)

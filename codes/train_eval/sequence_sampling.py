@@ -1,3 +1,5 @@
+import inspect
+
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -60,30 +62,33 @@ def get_seq_prob(model, data, data_func=lambda x: get_tensor_batch(x, batch_size
         # print(data, data_func)
         inputs = data_func(data)
         # print(inputs)
-        probs = {}
-        del_key(inputs, 'labels')
-        output = F.softmax(get_model_output(model, inputs)[0][0], dim=1)
+        probs = []
+        # del_key(inputs, 'labels')
+        layers = get_model_output(model, inputs)
+        output = F.softmax(layers[1][0], dim=1)
         for e1, e2, sent, idx in zip(data['e1'], data['e2'], data['sent'], data['idx']):
             if sent.shape[0] == 0:
                 continue
             e1l, e2l = e1.shape[0], e2.shape[0]
             pre_len = e1l + e2l
-            index_e1 = get_index(sent, e1) + pre_len
+            # index_e1 = get_index(sent, e1) + pre_len
             index_e2 = get_index(sent, e2) + pre_len
 
-            sub_output_e1 = output[index_e1:index_e1 + e1l]
+            # sub_output_e1 = output[index_e1:index_e1 + e1l]
             sub_output_e2 = output[index_e2:index_e2 + e2l]
             prob_e1, prob_e2 = np.zeros(e1l), np.zeros(e2l)
-            for e1i in range(e1l):
-                prob_e1[e1i] = sub_output_e1[e1i][e1[e1i]].item()
+            # for e1i in range(e1l):
+            #     prob_e1[e1i] = sub_output_e1[e1i][e1[e1i]].item()
             for e2i in range(e2l):
                 prob_e2[e2i] = sub_output_e2[e2i][e2[e2i]].item()
-            probs[tuple(idx)] = (prob_e1, prob_e2)
+            loss = layers[0].mean().item()
+            probs.append((prob_e1, prob_e2, loss))
     return probs
 
 
 def _sample_sequence(model, length, data, generated, num_samples=1, temperature=1, top_k=0, top_p=0.0,
                      repetition_penalty=1.0, data_func=lambda x: process_re_data(x)):
+    data = dict(data)
     model.eval()
     with torch.no_grad():
         for _ in range(length):
@@ -102,7 +107,7 @@ def _sample_sequence(model, length, data, generated, num_samples=1, temperature=
 
 
 def sample_sequence_entity(model, length, e1, e2, num_samples=1, temperature=1, top_k=0, top_p=0.0,
-                           repetition_penalty=1.0, stop_func=lambda x: False):
+                           repetition_penalty=1.0):
     generated = torch.zeros(num_samples, 0).long().cuda()
     if len(e1) + len(e2) > length:
         return generated
@@ -115,10 +120,16 @@ def sample_sequence_entity(model, length, e1, e2, num_samples=1, temperature=1, 
     return generated
 
 
-def sample_sequence(model, length, context, num_samples=1, temperature=1, top_k=0, top_p=0.0, repetition_penalty=1.0):
-    context = torch.tensor(context, dtype=torch.long).cuda()
-    context = context.unsqueeze(0).repeat(num_samples, 1)
-    data = {'sent': context}
+def sample_sequence(model, length, data, num_samples=1, temperature=1, top_k=0, top_p=0.0, repetition_penalty=1.0):
+    from global_constants import main_device
+    # context = torch.tensor(context, dtype=torch.long).cuda()
+    # context = context.unsqueeze(0).repeat(num_samples, 1)
+    # data = {'sent': context}
+    context = torch.zeros((num_samples, 0), dtype=torch.long).to(main_device)
+    params = inspect.signature(model.__call__)
+    for k in data:
+        if k not in params:
+            del_key(data, k)
     generated = _sample_sequence(model, length, data, context, num_samples=num_samples, temperature=temperature,
                                  top_k=top_k, top_p=top_p, repetition_penalty=repetition_penalty,
                                  data_func=lambda x: get_tensor_batch(x, batch_size=1, max_len=np.inf))

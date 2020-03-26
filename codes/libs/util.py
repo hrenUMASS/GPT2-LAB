@@ -209,7 +209,8 @@ def get_model_output(model, data):
     from global_constants import main_device
     # device = torch.device('cuda:0')
     for i in data:
-        data[i] = data[i].to(main_device)
+        req_grad = data[i].requires_grad
+        data[i] = data[i].clone().detach().requires_grad_(req_grad).to(main_device)
     # print([x.device for x in data.values()])
     # print(data)
     try:
