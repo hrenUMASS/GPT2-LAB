@@ -20,16 +20,22 @@ def eval_prob_one_epoch(dataloader, gpt2, model, length, num_samples, data_proce
     saps = [max_sample] * divs
     saps.append(num_samples - divs * max_sample)
     for step, raw in enumerate(dataloader):
+        data_time = time.time()
         data = data_process_func(raw)
+        print('data_time:{}'.format(time.time() - data_time))
         for i in range(len(data['e1'])):
+            step_time = time.time()
             e1, e2 = data['e1'][i], data['e2'][i]
             sents = []
             sent = []
+            gen_time = time.time()
             for ns in saps:
                 # print(length, ns)
                 sent_temp = sample_sequence_entity(model, length, e1, e2, num_samples=ns, top_k=5).cpu()
                 sent.append(sent_temp)
+            print('gen_time: {}'.format(time.time() - gen_time))
             # print(sent)
+            eval_time = time.time()
             for s in sent:
                 for l in range(s.shape[0]):
                     # print(s[l])
@@ -48,9 +54,12 @@ def eval_prob_one_epoch(dataloader, gpt2, model, length, num_samples, data_proce
                         'log_prod_prob': get_column(probs, 1), 'loss': get_column(probs, 2),
                         'sample_sent': [idx[2]] * sl}
                 result = pd.concat([result, pd.DataFrame(data)])
+            print('eval_time: {}'.format(time.time() - eval_time))
             log_info(sample_logger, 'Sampled {} sents for e1 {}, e2 {}'.format(len(sents),
                                                                                tokenizer.decode(e1.tolist()),
                                                                                tokenizer.decode(e2.tolist())))
+        print('tot time: {}, avg: {}'.format(time.time() - data_time,
+                                             (time.time() - data_time) / len(data['e1']) / num_samples))
     return result
 
 

@@ -106,7 +106,7 @@ def _sample_sequence(model, length, data, generated, num_samples=1, temperature=
     return generated
 
 
-def sample_sequence_entity(model, length, e1, e2, num_samples=1, temperature=1, top_k=0, top_p=0.0,
+def sample_sequence_entity(model, length, e1, e2, num_samples=1, temperature=1, top_k=5, top_p=0.0,
                            repetition_penalty=1.0):
     generated = torch.zeros(num_samples, 0).long().cuda()
     if len(e1) + len(e2) > length:
