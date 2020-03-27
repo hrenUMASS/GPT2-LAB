@@ -45,6 +45,7 @@ class DBIndexer(AbstractIndexer):
             'data': data,
             'ids': ids
         }
+        # print(params)
         return dataset_type(**params)
 
     def get_eval(self, prototype=None, tokenizer=None, dataset_type=None, eval_len=10, data=None):
@@ -52,10 +53,12 @@ class DBIndexer(AbstractIndexer):
             return None
         if self.eval is not None:
             return self.eval
-        if self.ids is not None:
+        if self.ids is None:
             conn = sqlite3.connect(self.db_path)
             c = conn.cursor()
             max_data = c.execute('SELECT id FROM idx order by id desc LIMIT 1').fetchall()[0]
+            if isinstance(max_data, list) or isinstance(max_data, tuple):
+                max_data = max_data[0]
             start_id = max_data - 3200 * eval_len
             temp_id = self.start_id
             self.start_id = start_id

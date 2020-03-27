@@ -24,7 +24,8 @@ class IdxFullDBDataset(Dataset):
             self.data = self.cursor.execute('SELECT e1, e2, sent FROM idx WHERE id IN {}'.format(tuple(ids))).fetchall()
         else:
             self.data = self.cursor.execute('SELECT e1, e2, sent FROM idx WHERE id > ? AND id <= ?',
-                                            (start_id, batch_len * 3200)).fetchall()
+                                            (start_id, start_id + batch_len * 3200)).fetchall()
+            # print(self.data, start_id, batch_len * 3200, self.cursor.execute('select MAX(id) from idx').fetchall())
         self.data = np.array(self.data)
         eids = set(self.data[:, [0, 1]].reshape(-1, 1).squeeze(1))
         # print(max(eids))

@@ -12,7 +12,7 @@ from libs import log_info, cuda_mem_in_mb
 from libs import loggers
 
 
-def train_one_epoch(dataloader, model, optimizer, scheduler, data_process_func):
+def train_one_epoch(dataloader, model, optimizer, scheduler, data_process_func, tok):
     losses = []
     cuda_logger, train_logger = loggers.cuda_logger, loggers.train_logger
     loss = None
@@ -22,6 +22,8 @@ def train_one_epoch(dataloader, model, optimizer, scheduler, data_process_func):
         # print(inspect.getsource(data_process_func))
         # print(raw)
         data = data_process_func(raw)
+        # for r in raw:
+        #     print(tok.decode(r[0].tolist()), tok.decode(r[1].tolist()))
         if data is None:
             log_info(cuda_logger, 'Empty data {} Iter'.format(step))
             continue
@@ -76,7 +78,8 @@ def train(model, dataset, batch_size, epochs, epoch_iter, learning_rate=1e-2, we
     for e in range(epochs):
         data_loader = DataLoader(dataset, shuffle=False, batch_size=batch_size, collate_fn=lambda x: x)
         epoch_start = time.time()
-        loss_value, loss = train_one_epoch(data_loader, model, optimizer, scheduler, data_process_func=data_func)
+        loss_value, loss = train_one_epoch(data_loader, model, optimizer, scheduler, data_process_func=data_func,
+                                           tok=tokenizer)
         losses.extend(loss_value)
         if save_path is not None:
             get_module_from_parallel(model).save_pretrained(save_path)
@@ -98,4 +101,5 @@ def train(model, dataset, batch_size, epochs, epoch_iter, learning_rate=1e-2, we
         log_info(train_logger,
                  'Time {}, Epoch Time {}, Avg Iter Time {}'.format(datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
                                                                    time_diff, time_diff / epoch_iter))
+
     return model, torch.tensor(losses)

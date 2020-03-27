@@ -94,7 +94,7 @@ class TrainModesEnums(Enum):
     train_eval = ModeParam(single_train,
                            _ce.mode, _ce.model, _ce.load_path, _ce.save_path, _ce.save_model, _ce.idx_path,
                            _ce.sent_path, _ce.ent_path, _ce.sent_index_path, _ce.ent_index_path, _ce.idx_index_path,
-                           _ce.db_path, _ce.ids, _ce.indexer_type, _ce.batch_len_size,
+                           _ce.db_path, _ce.ids, _ce.indexer_type, _ce.batch_len_size, _ce.tokenizer,
                            _ce.dataset_type, _ce.loaders, _ce.batch_len, _ce.eval_len, _ce.epochs, _ce.batch_size,
                            _ce.learning_rate, _ce.weight_decay, _ce.max_len,
                            _ce.from_checkpoint, _ce.continue_train, _ce.data)
@@ -125,7 +125,9 @@ data_process_func = {
             (lambda x: libs.get_tensor_batch(x, max_len=max_len, batch_size=batch_size)),
             _de.idxFull: lambda max_len=np.inf, batch_size=32:
             (lambda x: libs.process_re_data(
-                libs.get_re_data(x, max_len=max_len, batch_size=batch_size)))
+                libs.get_re_data(x, max_len=max_len, batch_size=batch_size))),
+            _de.idxDBFull: lambda max_len=np.inf, batch_size=32:
+            (lambda x: libs.process_re_data(libs.get_re_data(x, max_len=max_len, batch_size=batch_size))),
         },
         _me.GPT2LMHeadModel: {
             _de.idxSents: lambda max_len=np.inf, batch_size=32:
@@ -184,7 +186,8 @@ default_values = {
     _ce.continue_train: False,
     _ce.from_checkpoint: False,
     _ce.db_path: self_data_path + 'wiki2016.db',
-    _ce.ids: self_data_path + 'rexT/filtered.json',
+    # _ce.ids: self_data_path + 'rexT/filtered.json',
+    _ce.ids: None,
     _ce.indexer_type: 'idxDefaultIndexer',
     _ce.batch_len_size: 3200
 }

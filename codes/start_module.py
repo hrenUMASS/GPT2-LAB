@@ -75,7 +75,7 @@ def start_func(config):
         con[ce.prev_eval_loss] = np.inf
         # con[ce.eval_len] = max(con[ce.eval_len], 1)
         eval_params = get_params(con, indexer_type.get_eval)
-        print(eval_params)
+        # print(eval_params)
         con[ce.evalset] = data_indexer.get_eval(**eval_params)
 
     for i in range(con[ce.loaders]):
@@ -111,13 +111,13 @@ def single_train(config, index):
     loss = torch.mean(eval_losses)
     # print('index i', index)
     log_info(final_logger, 'final mean loss {}'.format(loss))
-    if loss > config[ce.prev_eval_loss]:
-        new_model.load_state_dict(model_state)
-        refuse = True
-        log_info(final_logger, 'loss {} is high, refused'.format(index))
-        loss = config[ce.prev_eval_loss]
-    else:
-        config[ce.prev_eval_loss] = loss
+    # if loss > config[ce.prev_eval_loss]:
+    #     new_model.load_state_dict(model_state)
+    #     refuse = True
+    #     log_info(final_logger, 'loss {} is high, refused'.format(index))
+    #     loss = config[ce.prev_eval_loss]
+    # else:
+    #     config[ce.prev_eval_loss] = loss
     if save_path is not None:
         if save_model and not refuse:
             new_model = get_module_from_parallel(new_model)

@@ -6,7 +6,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from libs import get_column
-from libs import get_model_output, in_tensor, process_re_data
+from libs import get_model_output, process_re_data
 from libs import log_info, cuda_mem_in_mb
 from libs import loggers
 from .sequence_sampling import sample_sequence_entity, get_seq_prob
@@ -34,7 +34,9 @@ def eval_prob_one_epoch(dataloader, gpt2, model, length, num_samples, data_proce
                 for l in range(s.shape[0]):
                     # print(s[l])
                     # print(tokenizer.decode(s[l].tolist()))
-                    if in_tensor(s[l], e1) and in_tensor(s[l], e2):
+                    sl = tokenizer.decode(s[l].tolist())
+                    e1l, e2l = tokenizer.decode(e1.tolist()), tokenizer.decode(e2.tolist())
+                    if e1l in sl and e2l in sl:
                         sents.append(s[l])
             # print(tokenizer.decode(e1.tolist()), tokenizer.decode(e2.tolist()))
             sl = len(sents)
@@ -46,7 +48,9 @@ def eval_prob_one_epoch(dataloader, gpt2, model, length, num_samples, data_proce
                         'log_prod_prob': get_column(probs, 1), 'loss': get_column(probs, 2),
                         'sample_sent': [idx[2]] * sl}
                 result = pd.concat([result, pd.DataFrame(data)])
-            log_info(sample_logger, 'Sampled {} sents for e1 {}, e2 {}'.format(len(sents), e1, e2))
+            log_info(sample_logger, 'Sampled {} sents for e1 {}, e2 {}'.format(len(sents),
+                                                                               tokenizer.decode(e1.tolist()),
+                                                                               tokenizer.decode(e2.tolist())))
     return result
 
 
