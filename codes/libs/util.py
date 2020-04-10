@@ -39,9 +39,8 @@ def in_tensor(ori, dst):
 
 
 def encode(tokenizer, elem, add_eos=False, **kwargs):
-    # print(elem)
     if isinstance(elem, str):
-        result = tokenizer.encode(elem, return_tensors='pt', **kwargs).long()
+        result = tokenizer.encode(text=elem, return_tensors='pt', **kwargs).long()
         # print(result)
         if len(result.shape) > 1:
             result = result[0]
@@ -119,23 +118,41 @@ def pos_id(length):
 
 def process_re_data(data):
     from global_constants import eos_id, ignore_index
-    e1_ids, e2_ids = data['e1'], data['e2']
+    e1_ids, e2_ids = data.get('e1', None), data.get('e2', None)
     input_ids = data.get('sent', None)
+    if e1_ids is not None and len(e1_ids) > 0:
+        device = e1_ids[0].device
+    elif input_ids is not None and len(input_ids) > 0:
+        device = input_ids[0].device
+    else:
+        return None
+    length = 0
+    if e1_ids is not None:
+        length = len(e1_ids)
+    if input_ids is not None and len(input_ids) > length:
+        length = len(input_ids)
     result_ids = []
     tokens = []
     attns = []
     poses = []
     labels = []
-    for i in range(len(e1_ids)):
-        e1, e2 = e1_ids[i], e2_ids[i]
-        e1l, e2l = e1.shape[0], e2.shape[0]
-        e1p, e2p = pos_id(e1l), pos_id(e2l)
-        e1a, e2a = type_ids(e1l, index=1, dtype=torch.float), type_ids(e2l, index=1, dtype=torch.float)
-        ids = torch.cat((e1, e2))
-        token = torch.cat((type_ids(e1l), type_ids(e2l, index=1)))
-        pos = torch.cat((e1p, e2p))
-        attn = torch.cat((e1a, e2a))
-        lab = torch.cat((e1, e2))
+    for i in range(length):
+        ids = torch.zeros(0, dtype=torch.long, device=device)
+        token = torch.zeros(0, dtype=torch.long, device=device)
+        pos = torch.zeros(0, dtype=torch.long, device=device)
+        attn = torch.zeros(0, dtype=torch.float, device=device)
+        lab = torch.zeros(0, dtype=torch.long, device=device)
+        if e1_ids is not None and e2_ids is not None \
+                and len(e1_ids) == len(e2_ids) and len(e1_ids) > 0 and len(e2_ids) > 0:
+            e1, e2 = e1_ids[i], e2_ids[i]
+            e1l, e2l = e1.shape[0], e2.shape[0]
+            e1p, e2p = pos_id(e1l), pos_id(e2l)
+            e1a, e2a = type_ids(e1l, index=1, dtype=torch.float), type_ids(e2l, index=1, dtype=torch.float)
+            ids = torch.cat((e1, e2))
+            token = torch.cat((type_ids(e1l), type_ids(e2l, index=1)))
+            pos = torch.cat((e1p, e2p))
+            attn = torch.cat((e1a, e2a))
+            lab = torch.cat((e1, e2))
         if input_ids is not None and len(input_ids) > 0:
             in_ids = input_ids[i]
             inl = in_ids.shape[0]
@@ -208,9 +225,12 @@ def get_re_data(data, max_len=np.inf, batch_size=32):
 def get_model_output(model, data):
     from global_constants import main_device
     # device = torch.device('cuda:0')
+    # for k, v in data.items():
+    #     print(k, v)
     for i in data:
-        req_grad = data[i].requires_grad
-        data[i] = data[i].clone().detach().requires_grad_(req_grad).to(main_device)
+        if data[i] is not None and isinstance(data[i], torch.Tensor):
+            req_grad = data[i].requires_grad
+            data[i] = data[i].clone().detach().requires_grad_(req_grad).to(main_device)
     # print([x.device for x in data.values()])
     # print(data)
     try:
@@ -218,7 +238,9 @@ def get_model_output(model, data):
         return output
     except Exception as e:
         print('data: ', data)
-        print([x.device for x in data.values()])
+        for k, v in data.items():
+            print(k, v.shape)
+        print([x.device for x in data.values() if x is not None])
         print(traceback.print_exc())
         exit()
 

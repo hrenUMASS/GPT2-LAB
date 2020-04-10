@@ -38,22 +38,26 @@ def top_k_top_p_filtering(logits, top_k=0, top_p=0.0, filter_value=-float('Inf')
     return logits
 
 
-def _get_next_logits(model, data, generated, num_samples=1, temperature=1, top_k=0, top_p=0.0, repetition_penalty=1.0,
-                     data_func=lambda x: process_re_data(x)):
-    inputs = data_func(data)
-    # print(inputs, inspect.getsource(data_func))
-    if 'labels' in inputs:
-        del inputs['labels']
+def _get_next_logits(model, inputs, generated, num_samples=1, temperature=1, top_k=0, top_p=0.0,
+                     repetition_penalty=1.0):
+    # from global_constants import eos_id
+    del_key(inputs, 'labels')
+    del_key(inputs, 'attention_mask')
     outputs = get_model_output(model, inputs)
+    past = outputs[1]
     next_token_logits = outputs[0][:, -1, :] / (temperature if temperature > 0 else 1.)
     # repetition penalty from CTRL (https://arxiv.org/abs/1909.05858)
     for i in range(num_samples):
         for _ in set(generated[i].tolist()):
             next_token_logits[i, _] /= repetition_penalty
+    # if generated.shape[1] > 0:
+    #     for i in range(num_samples):
+    #         if generated[i][-1].item() == eos_id:
+    #             next_token_logits[i, eos_id] -= 5
     filtered_logits = top_k_top_p_filtering(next_token_logits, top_k=top_k, top_p=top_p)
     if temperature == 0:  # greedy sampling:
         return filtered_logits
-    return F.softmax(filtered_logits, dim=-1)
+    return F.softmax(filtered_logits, dim=-1), past
 
 
 def get_seq_prob(model, data, data_func=lambda x: get_tensor_batch(x, batch_size=1, max_len=np.inf)):
@@ -88,21 +92,25 @@ def get_seq_prob(model, data, data_func=lambda x: get_tensor_batch(x, batch_size
 
 def _sample_sequence(model, length, data, generated, num_samples=1, temperature=1, top_k=0, top_p=0.0,
                      repetition_penalty=1.0, data_func=lambda x: process_re_data(x)):
-    data = dict(data)
     model.eval()
+    next_input = data_func(data)
+    pos_id = 0
     with torch.no_grad():
         for _ in range(length):
 
-            next_logits = _get_next_logits(model, data, generated, num_samples=num_samples, temperature=temperature,
-                                           top_k=top_k, top_p=top_p, repetition_penalty=repetition_penalty,
-                                           data_func=data_func)
+            next_logits, past = _get_next_logits(model, next_input, generated, num_samples=num_samples,
+                                                 temperature=temperature, top_k=top_k, top_p=top_p,
+                                                 repetition_penalty=repetition_penalty)
             if temperature == 0:  # greedy sampling:
                 next_token = torch.argmax(next_logits, dim=-1).unsqueeze(-1)
             else:
                 next_token = torch.multinomial(next_logits, num_samples=1)
-
+            next_input = {'input_ids': next_token,
+                          'token_type_ids': torch.zeros((num_samples, 1), dtype=np.long) + 2,
+                          'position_ids': torch.zeros((num_samples, 1), dtype=np.long) + pos_id,
+                          'past': past}
+            pos_id += 1
             generated = torch.cat((generated, next_token), dim=1)
-            data['sent'] = generated
     return generated
 
 

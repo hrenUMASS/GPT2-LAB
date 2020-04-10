@@ -21,7 +21,8 @@ class IdxFullDBDataset(Dataset):
             if isinstance(ids, str):
                 with open(ids, 'r') as f:
                     ids = json.load(f)
-            self.data = self.cursor.execute('SELECT e1, e2, sent FROM idx WHERE id IN {}'.format(tuple(ids))).fetchall()
+            self.data = self.cursor.execute(
+                'SELECT e1, e2, sent, id FROM idx WHERE id IN {}'.format(tuple(ids))).fetchall()
         else:
             self.data = self.cursor.execute('SELECT e1, e2, sent FROM idx WHERE id > ? AND id <= ?',
                                             (start_id, start_id + batch_len * 3200)).fetchall()
@@ -61,11 +62,11 @@ class IdxFullDBDataset(Dataset):
     def __getitem__(self, item):
         # print(self.ent_data)
         idx = self.data[item]
-        e1, e2 = self.ent_data[idx[-3]], self.ent_data[idx[-2]]
-        sent = self.sent_data[idx[-1]]
+        e1, e2 = self.ent_data[idx[0]], self.ent_data[idx[1]]
+        sent = self.sent_data[idx[2]]
         # print(idx, idx[-1] in self.sent_data, sent)
-        e1, e2 = self.unify_entity(e1, sent, idx[-1]), self.unify_entity(e2, sent, idx[-1])
-        sent = self.sent_data[idx[-1]]
+        e1, e2 = self.unify_entity(e1, sent, idx[2]), self.unify_entity(e2, sent, idx[2])
+        sent = self.sent_data[idx[2]]
         return e1, e2, sent, idx
 
     def __len__(self):
@@ -113,8 +114,6 @@ class IdxFullDBDataset(Dataset):
         space = 'Ġ'
         sent_tok = self.tokenizer.convert_ids_to_tokens(sent.tolist())
         ent_temp = ''.join(self.tokenizer.tokenize(ent))
-        a = 'I am here.'
-        b = self.tokenizer.encode(a, return_tensors='pt')[0]
         # print(ent_temp)
         # print(sent, sent_tok, ent)
         for i in range(len(sent_tok)):

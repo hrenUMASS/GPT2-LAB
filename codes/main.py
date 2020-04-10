@@ -9,7 +9,9 @@ logging.getLogger('transformers.tokenization_utils').disabled = True
 
 
 def main(config_file='model_config.json'):
+    import libs
     os.chdir('/'.join(os.path.abspath(__file__).split('/')[:-1]))
+    libs.log_info(libs.loggers.prepare_logger, 'Using config {}'.format(config_file))
     with open(config_file, 'r') as f:
         config = json.load(f) if os.path.exists(config_file) and os.path.isfile(config_file) else {}
     models = None

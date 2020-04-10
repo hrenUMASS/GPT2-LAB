@@ -61,7 +61,7 @@ class GPT2REModel(GPT2PreTrainedModel):
         for layer, heads in heads_to_prune.items():
             self.h[layer].attn.prune_heads(heads)
 
-    def forward(self, input_ids, attention_mask, position_ids, token_type_ids):
+    def forward(self, input_ids, attention_mask, position_ids, token_type_ids, past=None):
         device = input_ids.device
 
         inputs_embeds = torch.zeros(*input_ids.shape, self.wte.embedding_dim, dtype=self.wte.weight.dtype,
@@ -86,11 +86,12 @@ class GPT2REModel(GPT2PreTrainedModel):
             position_embeds[i] = pos_embd
 
         # print(inputs_embeds.shape, position_embeds.shape, token_type_embeds.shape, attention_mask.shape)
-        attention_mask = attention_mask.view(-1, input_ids.shape[-1])
-        attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
+        if attention_mask is not None:
+            attention_mask = attention_mask.view(-1, input_ids.shape[-1])
+            attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
 
-        attention_mask = attention_mask.to(dtype=next(self.parameters()).dtype)  # fp16 compatibility
-        attention_mask = (attention_mask - 1.0) * 10000.0
+            attention_mask = attention_mask.to(dtype=next(self.parameters()).dtype)  # fp16 compatibility
+            attention_mask = (attention_mask - 1.0) * 10000.0
 
         # print(e1_mask.shape, e2_mask.shape, attention_mask.shape)
         hidden_states = inputs_embeds + position_embeds + token_type_embeds
@@ -100,14 +101,17 @@ class GPT2REModel(GPT2PreTrainedModel):
 
         output_shape = input_shape + (hidden_states.size(-1),)
 
+        if past is None:
+            past = [None] * len(self.h)
+
         presents = ()
         all_attentions = []
         all_hidden_states = ()
-        for i, block in enumerate(self.h):
+        for i, (block, layer_past) in enumerate(zip(self.h, past)):
             if self.output_hidden_states:
                 all_hidden_states = all_hidden_states + (hidden_states.view(*output_shape),)
 
-            outputs = block(hidden_states, attention_mask=attention_mask)
+            outputs = block(hidden_states, layer_past=layer_past, attention_mask=attention_mask)
 
             hidden_states, present = outputs[:2]
             if self.output_past:
@@ -158,10 +162,10 @@ class GPT2LMREModel(GPT2PreTrainedModel):
         inputs.update(kwargs)
         return inputs
 
-    def forward(self, input_ids, attention_mask=None, position_ids=None, token_type_ids=None, labels=None):
+    def forward(self, input_ids, attention_mask=None, position_ids=None, token_type_ids=None, labels=None, past=None):
         from global_constants import ignore_index
         transformer_outputs = self.transformer(input_ids=input_ids, attention_mask=attention_mask,
-                                               position_ids=position_ids, token_type_ids=token_type_ids)
+                                               position_ids=position_ids, token_type_ids=token_type_ids, past=past)
         hidden_states = transformer_outputs[0]
 
         lm_logits = self.lm_head(hidden_states)

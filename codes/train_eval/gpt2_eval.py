@@ -18,17 +18,20 @@ def eval_prob_one_epoch(dataloader, gpt2, model, length, num_samples, data_proce
     max_sample = 32
     divs = num_samples // max_sample
     saps = [max_sample] * divs
-    saps.append(num_samples - divs * max_sample)
+    if sum(saps) < num_samples:
+        saps.append(num_samples - divs * max_sample)
     for step, raw in enumerate(dataloader):
-        data_time = time.time()
         data = data_process_func(raw)
-        print('data_time:{}'.format(time.time() - data_time))
+        if data is None:
+            continue
         for i in range(len(data['e1'])):
             step_time = time.time()
             e1, e2 = data['e1'][i], data['e2'][i]
+            e1l, e2l = tokenizer.decode(e1.tolist()), tokenizer.decode(e2.tolist())
             sents = []
             sent = []
             gen_time = time.time()
+            print('sampling {}, {}'.format(e1l, e2l))
             for ns in saps:
                 # print(length, ns)
                 sent_temp = sample_sequence_entity(model, length, e1, e2, num_samples=ns, top_k=5).cpu()
@@ -41,33 +44,41 @@ def eval_prob_one_epoch(dataloader, gpt2, model, length, num_samples, data_proce
                     # print(s[l])
                     # print(tokenizer.decode(s[l].tolist()))
                     sl = tokenizer.decode(s[l].tolist())
-                    e1l, e2l = tokenizer.decode(e1.tolist()), tokenizer.decode(e2.tolist())
                     if e1l in sl and e2l in sl:
                         sents.append(s[l])
             # print(tokenizer.decode(e1.tolist()), tokenizer.decode(e2.tolist()))
             sl = len(sents)
             idx = data['idx'][i]
-            data = {'e1': [e1] * sl, 'e2': [e2] * sl, 'sent': sents, 'idx': [idx] * sl}
+            res_data = {'e1': [idx[0]] * sl, 'e2': [idx[1]] * sl, 'sent': sents,
+                        'log_prod_prob': [], 'loss': [], 'sample_sent': [idx[2]] * sl}
+            # print(idx)
+            # print(sents)
             if sl > 0:
-                probs = get_seq_prob(gpt2, data, data_func=process_re_data)
-                data = {'e1': [idx[0]] * sl, 'e2': [idx[1]] * sl, 'sent': sents,
-                        'log_prod_prob': get_column(probs, 1), 'loss': get_column(probs, 2),
-                        'sample_sent': [idx[2]] * sl}
-                result = pd.concat([result, pd.DataFrame(data)])
+                divs = sl // max_sample
+                paps = [max_sample] * divs
+                if sum(paps) < sl:
+                    paps.append(sl - divs * max_sample)
+                for j, pap in enumerate(paps):
+                    temp_data = {'e1': [e1] * pap, 'e2': [e2] * pap,
+                                 'sent': sents[j * max_sample: j * max_sample + pap], 'idx': [idx] * pap}
+                    probs = get_seq_prob(gpt2, temp_data, data_func=process_re_data)
+                    res_data['log_prod_prob'].extend(get_column(probs, 1))
+                    res_data['loss'].extend(get_column(probs, 2))
+
+            result = pd.concat([result, pd.DataFrame(res_data)])
             print('eval_time: {}'.format(time.time() - eval_time))
             log_info(sample_logger, 'Sampled {} sents for e1 {}, e2 {}'.format(len(sents),
                                                                                tokenizer.decode(e1.tolist()),
                                                                                tokenizer.decode(e2.tolist())))
-        print('tot time: {}, avg: {}'.format(time.time() - data_time,
-                                             (time.time() - data_time) / len(data['e1']) / num_samples))
+            print('tot time: {}, avg: {}'.format(time.time() - step_time, (time.time() - step_time) / num_samples))
     return result
 
 
 def eval_sequences(gpt2, model, dataset, num_samples, max_len, data_func=lambda x: x, tokenizer=None):
-    sample_logger = loggers.sample_logger
+    # sample_logger = loggers.sample_logger
     data_loader = DataLoader(dataset, shuffle=False, batch_size=1, collate_fn=lambda x: x)
     ratios = eval_prob_one_epoch(data_loader, gpt2, model, max_len, num_samples, data_func, tokenizer=tokenizer)
-    log_info(sample_logger, 'Total ratio {}'.format(np.mean(tuple(x[-1] for x in ratios))))
+    # log_info(sample_logger, 'Total ratio {}'.format(np.mean(tuple(x[-1] for x in ratios))))
     return ratios
 
 
