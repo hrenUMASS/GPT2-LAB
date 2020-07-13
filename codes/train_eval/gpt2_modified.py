@@ -7,28 +7,6 @@ from transformers import GPT2PreTrainedModel
 from transformers.modeling_gpt2 import Block
 
 
-# from util import cat_tensors
-
-
-# import transformers as tfm
-class GELU(nn.Module):
-
-    def __init__(self, inplace=False):
-        super(GELU, self).__init__()
-        self.inplace = inplace
-
-    def forward(self, x: torch.Tensor):
-        data = 0.5 * x * (1 + torch.tanh(math.sqrt(2 / math.pi) * (x + 0.044715 * torch.pow(x, 3))))
-        if self.inplace:
-            x.data = data.data
-            return x
-        return data
-
-    def extra_repr(self):
-        inplace_str = 'inplace=True' if self.inplace else ''
-        return inplace_str
-
-
 class GPT2REModel(GPT2PreTrainedModel):
 
     def __init__(self, config):
@@ -153,15 +131,6 @@ class GPT2LMREModel(GPT2PreTrainedModel):
     def get_output_embeddings(self):
         return self.lm_head
 
-    def prepare_inputs_for_generation(self, input_ids, **kwargs):
-        # only last token for inputs_ids if past is defined in kwargs
-        if "past" in kwargs and kwargs["past"]:
-            input_ids = input_ids[:, -1].unsqueeze(-1)
-
-        inputs = {"input_ids": input_ids}
-        inputs.update(kwargs)
-        return inputs
-
     def forward(self, input_ids, attention_mask=None, position_ids=None, token_type_ids=None, labels=None, past=None):
         from global_constants import ignore_index
         transformer_outputs = self.transformer(input_ids=input_ids, attention_mask=attention_mask,
@@ -184,18 +153,3 @@ class GPT2LMREModel(GPT2PreTrainedModel):
             outputs = (loss,) + outputs
 
         return outputs  # (loss), lm_logits, presents, (all hidden_states), (attentions)
-
-# a = nn.Embedding(20, 5)
-# b = torch.randint(0, 20, (10, 20))
-# c = torch.randint(0, 20, (10, 25))
-# b, c = a(b), a(c)
-# print(torch.cat((b, c), dim=-2))
-# e1l, e2l, sent_len = 2, 3, 10
-# e1p, e2p, pos = torch.arange(0, e1l, dtype=torch.long), \
-#                 torch.arange(0, e2l, dtype=torch.long), \
-#                 torch.arange(0, sent_len, dtype=torch.long)
-#
-# print(e1p, '\n', e2p, '\n', pos)
-# temp = torch.cat((e1p, e2p, pos))
-# print(temp)
-# print(temp.unsqueeze(0).view(-1, sent_len + e1l + e2l))

@@ -12,6 +12,17 @@ from libs import loggers
 from train_eval import train, evaluate, eval_sequences, gpt2_eval
 
 
+def save_torch(obj, file_path):
+    file_path, file_name = os.path.split(file_path)
+    file_name, file_ext = os.path.splitext(file_name)
+    i = 1
+    if os.path.isfile(file_path + '/' + file_name + file_ext):
+        while os.path.isfile(file_path + '/' + file_name + str(i) + file_ext):
+            i += 1
+    print(file_path + '/' + file_name + str(i) + file_ext)
+    torch.save(obj, file_path + '/' + file_name + str(i) + file_ext)
+
+
 def start_func(config):
     from global_constants import data_process_func
     from global_constants import ModelEnums, DatasetEnums, TrainModesEnums, ConfigEnums, DataIndexerEnums
@@ -71,25 +82,50 @@ def start_func(config):
 
     data_indexer = indexer_type(**dataset_parameters)
     con[ce.data_indexer] = data_indexer
+    save_type = con[ce.save_type]
     if ce.eval_len in con:
         con[ce.prev_eval_loss] = np.inf
         # con[ce.eval_len] = max(con[ce.eval_len], 1)
         eval_params = get_params(con, indexer_type.get_eval)
         # print(eval_params)
         con[ce.evalset] = data_indexer.get_eval(**eval_params)
-
-    for i in range(con[ce.loaders]):
-        new_con = dict(con)
-        new_con[ce.dataset] = data_indexer.get_dataset(i, tokenizer=tok, dataset_type=dataset_class,
-                                                       batch_len=con[ce.batch_len])
-        # ds = new_con[ce.dataset]
-        new_con[ce.epoch_iter] = len(new_con[ce.dataset]) // (new_con[ce.batch_size] if ce.batch_size in new_con else 1)
-        new_model, loss = method(new_con, i)
-        con[ce.model] = new_model
-        con[ce.prev_eval_loss] = loss
+    if save_type == 'segments':
+        for i in range(con[ce.loaders]):
+            new_con = dict(con)
+            new_con[ce.dataset] = data_indexer.get_dataset(i, tokenizer=tok, dataset_type=dataset_class,
+                                                           batch_len=con[ce.batch_len])
+            if new_con[ce.dataset] is None:
+                break
+            # ds = new_con[ce.dataset]
+            new_con[ce.epoch_iter] = len(new_con[ce.dataset]) // (
+                new_con[ce.batch_size] if ce.batch_size in new_con else 1)
+            new_model, loss = method(new_con, i)
+            con[ce.model] = new_model
+            con[ce.prev_eval_loss] = loss
+    elif save_type == 'epochs':
+        epochs = con[ce.epochs]
+        loaders = con[ce.loaders]
+        con[ce.epochs] = 1
+        for e in range(epochs):
+            for i in range(loaders):
+                new_con = dict(con)
+                new_con[ce.dataset] = data_indexer.get_dataset(i, tokenizer=tok, dataset_type=dataset_class,
+                                                               batch_len=con[ce.batch_len])
+                if new_con[ce.dataset_type] is None:
+                    break
+                new_con[ce.epoch_iter] = len(new_con[ce.dataset]) // (
+                    new_con[ce.batch_size] if ce.batch_size in new_con else 1)
+                if i != epochs - 1:
+                    new_con[ce.save_model] = False
+                new_model, loss = method(new_con, e)
+                con[ce.model] = new_model
+                con[ce.prev_eval_loss] = loss
+    else:
+        raise Exception('No such save type {}'.format(con[ce.save_type]))
 
 
 def single_train(config, index):
+    print(index)
     from global_constants import ConfigEnums, main_device
     ce = ConfigEnums
     save_path = config[ce.save_path]
@@ -122,9 +158,17 @@ def single_train(config, index):
         if save_model and not refuse:
             new_model = get_module_from_parallel(new_model)
             tokenizer = get_module_from_parallel(config[ce.tokenizer])
-            log_info(final_logger, 'saving trained models: ' + save_path)
-            new_model.save_pretrained(save_path)
-            tokenizer.save_pretrained(save_path)
+            if config[ce.save_type] == 'segments':
+                log_info(final_logger, 'saving trained models: ' + save_path)
+                new_model.save_pretrained(save_path)
+                tokenizer.save_pretrained(save_path)
+            elif config[ce.save_type] == 'epochs':
+                save_path2 = save_path + '/' + str(index)
+                if not os.path.isdir(save_path2):
+                    os.mkdir(save_path2)
+                new_model.save_pretrained(save_path2)
+                tokenizer.save_pretrained(save_path2)
+
         log_path = list(os.path.split(save_path)[:-1])
         log_path.append('log')
         log_path.append(str(index) + '/')
@@ -132,17 +176,18 @@ def single_train(config, index):
         if not os.path.exists(log_path):
             os.mkdir(log_path)
         log_info(final_logger, 'saving training losses')
-        torch.save(train_losses, log_path + 'train_losses.pt')
+        save_torch(train_losses, log_path + 'train_losses.pt')
         log_info(final_logger, 'saving evaluation losses')
-        torch.save(eval_losses, log_path + 'eval_losses.pt')
-        torch.save(perplexity, log_path + 'perplexity.pt')
-        torch.save(perplexities, log_path + 'perplexities.pt')
+        save_torch(eval_losses, log_path + 'eval_losses.pt')
+        save_torch(perplexity, log_path + 'perplexity.pt')
+        save_torch(perplexities, log_path + 'perplexities.pt')
         log_info(final_logger, 'mean eval losses {}'.format(torch.mean(eval_losses)))
         log_info(final_logger, 'All saved')
     return new_model, loss
 
 
 def single_sequence_generation(config, index):
+    print(index)
     from global_constants import ConfigEnums, main_device
     ce = ConfigEnums
     save_path = config[ce.save_path]
@@ -159,7 +204,7 @@ def single_sequence_generation(config, index):
         if not os.path.exists(log_path):
             os.mkdir(log_path)
         log_info(final_logger, 'saving ratios')
-        torch.save(ratios, log_path + 'ratios.pt')
+        save_torch(ratios, log_path + 'ratios.pt')
         log_info(final_logger, 'All saved')
     return config[ce.model], -1
 
@@ -181,6 +226,6 @@ def gpt2_model_eval(config, index):
         if not os.path.exists(log_path):
             os.mkdir(log_path)
         log_info(final_logger, 'saving ratios')
-        torch.save(ratios, log_path + 'gpt2_ratios.pt')
+        save_torch(ratios, log_path + 'gpt2_ratios.pt')
         log_info(final_logger, 'All saved')
     return config[ce.model], -1

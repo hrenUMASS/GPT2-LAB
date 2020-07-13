@@ -6,15 +6,15 @@ from .abstract_indexer import AbstractIndexer
 
 class DBIndexer(AbstractIndexer):
 
-    def __init__(self, db_path, ids=None, batch_len_size=3200):
+    def __init__(self, db_path, ids=None, batch_size=32):
         super(DBIndexer, self).__init__()
         if isinstance(ids, str):
             with open(ids, 'r') as f:
                 ids = json.load(f)
         self.ids = ids
-        self.db_path = db_path
+        self.cursor = sqlite3.connect(db_path).cursor()
         self.start_id = 0
-        self.batch_size = batch_len_size
+        self.batch_size = batch_size
 
     def get_dataset(self, nth_loader, prototype=None, tokenizer=None, dataset_type=None, batch_len=100, data=None):
         if prototype is not None:
@@ -34,32 +34,34 @@ class DBIndexer(AbstractIndexer):
         ids = self.ids
         start_id = self.start_id
         if ids is not None:
-            ids = ids[nth_loader * batch_len * self.batch_size + 1:(nth_loader + 1) * batch_len * self.batch_size + 1]
+            ids = ids[nth_loader * batch_len * self.batch_size:(nth_loader + 1) * batch_len * self.batch_size]
         else:
             self.start_id += self.batch_size * batch_len
         params = {
             'tokenizer': tokenizer,
-            'db_path': self.db_path,
+            'cursor': self.cursor,
             'start_id': start_id,
             'batch_len': batch_len,
             'data': data,
             'ids': ids
         }
         # print(params)
+        if ids is not None and len(ids) < 1:
+            return None
         return dataset_type(**params)
 
     def get_eval(self, prototype=None, tokenizer=None, dataset_type=None, eval_len=10, data=None):
+        from libs import safe_sql
         if eval_len == 0:
             return None
         if self.eval is not None:
             return self.eval
         if self.ids is None:
-            conn = sqlite3.connect(self.db_path)
-            c = conn.cursor()
-            max_data = c.execute('SELECT id FROM idx order by id desc LIMIT 1').fetchall()[0]
+
+            max_data = safe_sql(self.cursor, 'SELECT id FROM idx order by id desc LIMIT 1')[0]
             if isinstance(max_data, list) or isinstance(max_data, tuple):
                 max_data = max_data[0]
-            start_id = max_data - 3200 * eval_len
+            start_id = max_data - self.batch_size * eval_len
             temp_id = self.start_id
             self.start_id = start_id
             eva = self.get_dataset(0, prototype=prototype, tokenizer=tokenizer, dataset_type=dataset_type,

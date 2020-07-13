@@ -4,73 +4,45 @@ import sqlite3
 import numpy as np
 from torch.utils.data import Dataset
 
-from libs import encode
+from libs import encode, safe_sql, split_array
+import libs
 
 
-class IdxFullDBDataset(Dataset):
+class IdxDBDataset(Dataset):
 
-    def __init__(self, tokenizer, db_path=None, start_id=0, batch_len=100, data=None, ids=None, **kwargs):
-        # print('idx', total_len, eval_size, data)
-        self.tokenizer = tokenizer
-        self.db = sqlite3.connect(db_path)
-        self.cursor = self.db.cursor()
-        # print(self.data)
+    def __init__(self, cursor=None, start_id=0, batch_len=100, data=None, ids=None, **kwargs):
+        self.cursor = cursor
         if data is not None and 'data' in data:
             self.data = data['data']
         elif ids is not None:
             if isinstance(ids, str):
                 with open(ids, 'r') as f:
                     ids = json.load(f)
-            self.data = self.cursor.execute(
-                'SELECT e1, e2, sent, id FROM idx WHERE id IN {}'.format(tuple(ids))).fetchall()
+            self.data = []
+            ids_seg = split_array(ids)
+            cursor.execute('BEGIN TRANSACTION')
+            for seg in ids_seg:
+                # print(seg)
+                self.data.extend(
+                    safe_sql(self.cursor, 'SELECT * FROM idx WHERE id IN ({})'
+                             .format(','.join('?' * len(seg))), arguments=seg)
+                )
+            cursor.execute('COMMIT')
         else:
-            self.data = self.cursor.execute('SELECT e1, e2, sent FROM idx WHERE id > ? AND id <= ?',
-                                            (start_id, start_id + batch_len * 3200)).fetchall()
-            # print(self.data, start_id, batch_len * 3200, self.cursor.execute('select MAX(id) from idx').fetchall())
+            self.data = safe_sql(self.cursor, 'SELECT * FROM idx WHERE id > ? AND id <= ?',
+                                 (start_id, start_id + batch_len))
         self.data = np.array(self.data)
-        eids = set(self.data[:, [0, 1]].reshape(-1, 1).squeeze(1))
-        # print(max(eids))
-        # print(eids)
-        if data is not None and 'ent' in data:
-            self.ent_data = data['ent']
-        else:
-            self.ent_data = self.cursor.execute('SELECT * FROM entities WHERE id IN {}'.format(tuple(eids))).fetchall()
-            self.ent_data = {e[0]: e[1] for e in self.ent_data}
-            # print(self.ent_data)
-        sids = set(self.data[:, 2])
-        # print(max(sids))
-        # print(sids)
-        if data is not None and 'sent' in data:
-            self.sent_data = data['sent']
-        else:
-            # print(sids)
-            self.sent_data = self.cursor.execute(
-                'SELECT * FROM sentences WHERE id IN {}'.format(tuple(sids))).fetchall()
-            # print(self.sent_data)
-            # print(type(self.sent_data))
-            # print(self.sent_data[:10])
-            self.sent_data = {s[0]: encode(tokenizer, s[1], add_eos=True, add_prefix_space=True) for s in
-                              self.sent_data}
-            # print(type(self.sent_data), self.sent_data)
-            # print(self.sent_data)
-        # print('idd', idx_file.tell())
-        # print(self.data, len(self.data))
+        libs.log_info(libs.prepare_logger, 'loaded data length {}'.format(len(self.data)))
 
     def get_loaded_length(self):
         return len(self.data)
 
-    def __getitem__(self, item):
-        # print(self.ent_data)
-        idx = self.data[item]
-        e1, e2 = self.ent_data[idx[0]], self.ent_data[idx[1]]
-        sent = self.sent_data[idx[2]]
-        # print(idx, idx[-1] in self.sent_data, sent)
-        e1, e2 = self.unify_entity(e1, sent, idx[2]), self.unify_entity(e2, sent, idx[2])
-        sent = self.sent_data[idx[2]]
-        return e1, e2, sent, idx
-
     def __len__(self):
         return len(self.data)
+
+    def __getitem__(self, item):
+        idx = self.data[item]
+        return idx
 
     def get_data(self):
         return {'data': self.data}
@@ -90,6 +62,81 @@ class IdxFullDBDataset(Dataset):
             param['data'] = temp_data
             result.append(type(self)(**param))
         return result
+
+
+class IdxEpDBDataset(IdxDBDataset):
+    def __init__(self, tokenizer, cursor=None, start_id=0, batch_len=100, data=None, ids=None, **kwargs):
+        super(IdxEpDBDataset, self).__init__(cursor=cursor, start_id=start_id, batch_len=batch_len, data=data,
+                                             ids=ids, **kwargs)
+        self.tokenizer = tokenizer
+        eids = {int(x) for x in self.data[:, [1, 2]].reshape(-1, 1).squeeze(1)}
+        if data is not None and 'ent' in data:
+            self.ent_data = data['ent']
+        else:
+            self.ent_data = []
+            eids_seg = split_array(eids)
+            self.cursor.execute('BEGIN TRANSACTION')
+            for seg in eids_seg:
+                # print('seg', seg)
+                # print(self.cursor.execute('SELECT * FROM entities WHERE id=?', (seg[0],)).fetchall())
+                # print(all(isinstance(x, int) for x in seg))
+                self.ent_data.extend(
+                    safe_sql(self.cursor, 'SELECT * FROM entities WHERE id IN ({})'
+                             .format(','.join('?' * len(seg))), arguments=seg)
+                )
+                # self.ent_data.extend(
+                #     self.cursor.execute('SELECT * FROM entities WHERE id IN ({})'
+                #                         .format(','.join('?' * len(seg))), seg)
+                # )
+            self.cursor.execute('COMMIT')
+            self.ent_data = {e[0]: e[1] for e in self.ent_data}
+
+    def __getitem__(self, item):
+        idx = self.data[item]
+        e1, e2 = self.ent_data[idx[1]], self.ent_data[idx[2]]
+        # return encode(self.tokenizer, e1), encode(self.tokenizer, e2), idx
+        return encode(self.tokenizer, e1), encode(self.tokenizer, e2), idx
+
+
+class IdxFullDBDataset(IdxEpDBDataset):
+
+    def __init__(self, tokenizer, cursor=None, start_id=0, batch_len=100, data=None, ids=None, **kwargs):
+        super(IdxFullDBDataset, self).__init__(tokenizer=tokenizer, cursor=cursor, start_id=start_id,
+                                               batch_len=batch_len, data=data, ids=ids, **kwargs)
+        sids = {int(x) for x in self.data[:, 3]}
+        # print(len(sids))
+        if data is not None and 'sent' in data:
+            self.sent_data = data['sent']
+        else:
+            self.sent_data = []
+            sids_seg = split_array(sids)
+            self.cursor.execute('BEGIN TRANSACTION')
+            for seg in sids_seg:
+                self.sent_data.extend(
+                    safe_sql(self.cursor, 'SELECT * FROM sentences WHERE id IN ({})'
+                             .format(','.join('?' * len(seg))), arguments=seg)
+                )
+                # self.sent_data.extend(
+                #     self.cursor.execute('SELECT * FROM sentences WHERE id IN ({})'
+                #                         .format(','.join('?' * len(seg))), seg)
+                # )
+            self.cursor.execute('COMMIT')
+            self.sent_data = {s[0]: encode(tokenizer, s[1], add_eos=True, add_prefix_space=True) for s in
+                              self.sent_data}
+            # print(len(self.sent_data))
+
+            # print(list(self.sent_data.keys()))
+            # print(self.data)
+
+    def get_loaded_length(self):
+        return len(self.data)
+
+    def __getitem__(self, item):
+        e1, e2, idx = IdxEpDBDataset.__getitem__(self, item)
+        sent = self.sent_data[idx[3]]
+        e1, e2 = self.unify_entity(e1, sent, idx[3]), self.unify_entity(e2, sent, idx[3])
+        sent = self.sent_data[idx[3]]
+        return e1, e2, sent, idx
 
     def unify_entity(self, ent, sent, sent_idx):
         def in_tensor(ent, sent_tok, idx):

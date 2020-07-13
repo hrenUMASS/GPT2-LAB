@@ -1,6 +1,8 @@
 import inspect
 import traceback
 from typing import Sequence
+import time
+from datetime import datetime
 
 import numpy as np
 import torch
@@ -29,6 +31,54 @@ def get_index(ori, comp):
             if index != -1:
                 return index
     return index
+
+
+def safe_sql(cursor, command, arguments=None, fetch='all', size=1):
+    prepare_logger = loggers.prepare_logger
+    start_time = time.time()
+    dtn = datetime.now()
+    while True:
+        try:
+            if arguments is None:
+                c = cursor.execute(command)
+            else:
+                c = cursor.execute(command, arguments)
+
+            if fetch == 'all':
+                res = c.fetchall()
+                # print(cursor.execute('explain ' + command, arguments).fetchall())
+                # if 'idx' not in command:
+                #     print(command, arguments)
+                #     command2 = command[:command.index('WHERE id ')] + 'WHERE id=?'
+                #     print(command2)
+                #     print(cursor.execute(command, arguments).fetchall(),
+                #           repr(cursor.execute(command2, arguments[0]).fetchall()))
+                # print('res', res)
+            elif fetch == 'one':
+                res = c.fetchone()
+            else:
+                res = c.fetchmany(size=size)
+            return res
+        except Exception as e:
+            print(e)
+            if time.time() - start_time > 60:
+                log_info(prepare_logger, 'locked from {} interval {}'.format(dtn.strftime("%d/%m/%Y %H:%M:%S"),
+                                                                             time.time() - start_time))
+                print(e)
+                if 'lock' not in str(e):
+                    break
+        continue
+
+
+def split_array(arr, block=1000):
+    arr = list(arr)
+    seg = len(arr) // block
+    if seg * block != len(arr):
+        seg += 1
+    res = []
+    for i in range(seg):
+        res.append(arr[block * i: block * (i + 1)])
+    return res
 
 
 def in_tensor(ori, dst):
@@ -149,7 +199,7 @@ def process_re_data(data):
             e1p, e2p = pos_id(e1l), pos_id(e2l)
             e1a, e2a = type_ids(e1l, index=1, dtype=torch.float), type_ids(e2l, index=1, dtype=torch.float)
             ids = torch.cat((e1, e2))
-            token = torch.cat((type_ids(e1l), type_ids(e2l, index=1)))
+            token = torch.cat((type_ids(e1l, index=1), type_ids(e2l, index=1)))
             pos = torch.cat((e1p, e2p))
             attn = torch.cat((e1a, e2a))
             lab = torch.cat((e1, e2))
