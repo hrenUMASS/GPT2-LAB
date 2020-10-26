@@ -1,15 +1,14 @@
 from torch import nn
 from torch.nn import CrossEntropyLoss
+from transformers import GPT2Model
 from transformers import GPT2PreTrainedModel
-
-from .gpt2_modified import GPT2REModel
 
 
 class GPT2REClsModel(GPT2PreTrainedModel):
 
     def __init__(self, config):
         super(GPT2REClsModel, self).__init__(config)
-        self.transformer = GPT2REModel(config)
+        self.transformer = GPT2Model(config)
         self.cls_head = nn.Linear(config.n_embd, config.n_classes, bias=False)
         # print(self.lm_head)
         self.init_weights()

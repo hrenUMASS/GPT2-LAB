@@ -46,22 +46,22 @@ class GPT2REModel(GPT2PreTrainedModel):
         if token_type_ids is not None:
             token_type_embeds = self.wte(token_type_ids)
 
-        if token_type_ids is not None and position_ids is not None:
-            for i in range(input_ids.shape[0]):
-                inp = input_ids[i]
-                type_id = token_type_ids[i]
-                e1, e2 = inp[type_id == 0], inp[type_id == 1]
-                pos = position_ids[i]
-                ep1, ep2 = pos[type_id == 0], pos[type_id == 1]
-                e1e, e2e = self.wte(e1), self.wte(e2)
-                e1p, e2p = self.wpe(ep1), self.wpe(ep2)
-                embd = self.ent(torch.cat((e1e, e2e)))
-                pos_embd = self.pos(torch.cat((e1p, e2p)))
-                if 2 in type_id:
-                    embd = torch.cat((embd, self.wte(inp[type_id == 2])))
-                    pos_embd = torch.cat((pos_embd, self.wpe(pos[type_id == 2])))
-                inputs_embeds[i] = embd
-                position_embeds[i] = pos_embd
+        # if token_type_ids is not None and position_ids is not None:
+        for i in range(input_ids.shape[0]):
+            inp = input_ids[i]
+            type_id = token_type_ids[i]
+            e1, e2 = inp[type_id == 0], inp[type_id == 1]
+            pos = position_ids[i]
+            ep1, ep2 = pos[type_id == 0], pos[type_id == 1]
+            e1e, e2e = self.wte(e1), self.wte(e2)
+            e1p, e2p = self.wpe(ep1), self.wpe(ep2)
+            embd = self.ent(torch.cat((e1e, e2e)))
+            pos_embd = self.pos(torch.cat((e1p, e2p)))
+            if 2 in type_id:
+                embd = torch.cat((embd, self.wte(inp[type_id == 2])))
+                pos_embd = torch.cat((pos_embd, self.wpe(pos[type_id == 2])))
+            inputs_embeds[i] = embd
+            position_embeds[i] = pos_embd
 
         if position_ids is None:
             position_ids = torch.arange(0, input_ids.shape[1], dtype=torch.long)
