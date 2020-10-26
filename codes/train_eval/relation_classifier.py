@@ -25,7 +25,7 @@ class GPT2REClsModel(GPT2PreTrainedModel):
         hidden_states = transformer_outputs[0]
         hid = hidden_states.mean(axis=1)
         # print(self.lm_head)
-        cls_logits = self.cls_head(hid).softmax(dim=1)
+        cls_logits = self.cls_head(hid)
 
         outputs = (cls_logits,) + transformer_outputs[1:]
         if labels is not None:
