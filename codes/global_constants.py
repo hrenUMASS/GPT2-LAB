@@ -16,6 +16,9 @@ eos_id = 50256
 main_device = torch.device('cuda:0')
 
 
+# main_device = torch.device('cpu')
+
+
 class DatasetParam:
 
     def __init__(self, class_type, *fields):
@@ -27,6 +30,13 @@ class ModeParam:
     def __init__(self, func, *fields):
         self.func = func
         self.fields = set(fields)
+
+
+class ModelParam:
+
+    def __init__(self, model, default_config):
+        self.model = model
+        self.config = default_config
 
 
 class ConfigEnums(Enum):
@@ -68,14 +78,19 @@ class ConfigEnums(Enum):
     indexer_type = 'indexer_type'
     batch_len_size = 'batch_len_size'
     save_type = 'save_type'
+    random_init = 'random_init'
+    config = 'config'
+    method = 'method'
+    cal = 'cal'
 
 
 _ce = ConfigEnums
 
 
 class ModelEnums(Enum):
-    GPT2LMREModel = te.GPT2LMREModel
-    GPT2LMHeadModel = tfm.GPT2LMHeadModel
+    GPT2LMREModel = ModelParam(te.GPT2LMREModel, tfm.GPT2Config)
+    GPT2LMHeadModel = ModelParam(tfm.GPT2LMHeadModel, tfm.GPT2Config)
+    GPT2REClsModel = ModelParam(te.GPT2REClsModel, tfm.GPT2Config)
 
 
 class DatasetEnums(Enum):
@@ -86,6 +101,7 @@ class DatasetEnums(Enum):
                            _ce.data)
     idxDBFull = DatasetParam(dh.IdxFullDBDataset, _ce.db_path, _ce.ids)
     idxDBEnts = DatasetParam(dh.IdxEpDBDataset, _ce.db_path, _ce.ids)
+    idxDBCls = DatasetParam(dh.IdxClsDataset, _ce.db_path, _ce.ids)
 
 
 class DataIndexerEnums(Enum):
@@ -101,21 +117,21 @@ class TrainModesEnums(Enum):
                            _ce.dataset_type, _ce.loaders, _ce.batch_len, _ce.eval_len, _ce.epochs, _ce.batch_size,
                            _ce.learning_rate, _ce.weight_decay, _ce.max_len,
                            _ce.from_checkpoint, _ce.continue_train, _ce.data,
-                           _ce.save_type)
+                           _ce.save_type, _ce.random_init, _ce.config, _ce.method, _ce.cal)
     eval_sequences = ModeParam(single_sequence_generation,
                                _ce.mode, _ce.gpt2, _ce.model, _ce.load_path, _ce.save_path, _ce.idx_path, _ce.sent_path,
                                _ce.ent_path, _ce.idx_index_path, _ce.sent_index_path, _ce.ent_index_path, _ce.ent_data,
                                _ce.db_path, _ce.ids, _ce.indexer_type, _ce.batch_len_size, _ce.tokenizer,
                                _ce.dataset_type, _ce.loaders, _ce.batch_len, _ce.max_len, _ce.num_samples,
                                _ce.from_checkpoint, _ce.continue_train, _ce.data,
-                               _ce.save_type)
+                               _ce.save_type, _ce.config, _ce.method, _ce.cal)
     gpt2_model_eval = ModeParam(gpt2_model_eval, _ce.mode, _ce.model, _ce.load_path, _ce.save_path, _ce.idx_path,
                                 _ce.sent_path, _ce.ent_path, _ce.idx_index_path, _ce.sent_index_path, _ce.db_path,
                                 _ce.ent_index_path, _ce.ent_data, _ce.gpt2, _ce.ids, _ce.indexer_type,
                                 _ce.batch_len_size,
                                 _ce.dataset_type, _ce.loaders, _ce.batch_len, _ce.max_len,
                                 _ce.from_checkpoint, _ce.continue_train, _ce.data,
-                                _ce.save_type)
+                                _ce.save_type, _ce.config, _ce.method, _ce.cal)
 
 
 _me = ModelEnums
@@ -142,6 +158,10 @@ data_process_func = {
             _de.idxFull: lambda max_len=np.inf, batch_size=32:
             (lambda x: libs.get_tensor_batch(
                 libs.get_re_data(x, max_len=max_len, batch_size=batch_size)['sent']))
+        },
+        _me.GPT2REClsModel: {
+            _de.idxDBCls: lambda max_len=np.inf, batch_size=32: (
+                lambda x: libs.process_cls_data(x))
         }
     },
     _tme.eval_sequences: {
@@ -156,6 +176,11 @@ data_process_func = {
             _de.idxDBEnts: lambda max_len=np.inf, batch_size=32: (
                 lambda x: libs.get_re_data(x, max_len, batch_size=batch_size)
             )
+        },
+        _me.GPT2REClsModel: {
+            _de.idxDBFull: lambda max_len=np.inf, batch_size=32: (
+                lambda x: libs.get_re_data(x, max_len=max_len, batch_size=batch_size)
+            ),
         }
     },
     _tme.gpt2_model_eval: {
@@ -166,7 +191,29 @@ data_process_func = {
                 lambda x: libs.get_re_data(x, max_len=max_len, batch_size=batch_size)),
             _de.idxDBFull: lambda max_len=np.inf, batch_size=32: (
                 lambda x: libs.get_re_data(x, max_len=max_len, batch_size=batch_size))
+        },
+        _me.GPT2REClsModel: {
+            _de.idxDBCls: lambda max_len=np.inf, batch_size=32: (
+                lambda x: libs.process_cls_data(x))
         }
+    }
+}
+
+main_methods = {
+    _tme.train_eval: {
+        _me.GPT2LMREModel: te.train,
+        _me.GPT2REClsModel: te.train,
+        _me.GPT2LMHeadModel: te.train
+    },
+    _tme.eval_sequences: {
+        _me.GPT2LMREModel: te.eval_sequences,
+        _me.GPT2REClsModel: te.classifier_eval,
+        _me.GPT2LMHeadModel: te.eval_sequences
+    },
+    _tme.gpt2_model_eval: {
+        _me.GPT2LMREModel: te.gpt2_eval,
+        _me.GPT2REClsModel: te.gpt2_eval,
+        _me.GPT2LMHeadModel: te.gpt2_eval
     }
 }
 
@@ -174,6 +221,7 @@ default_values = {
     _ce.mode: 'train_eval',
     _ce.load_path: 'gpt2-medium',
     _ce.gpt2: 'gpt2',
+    _ce.cal: 'gpu',
     _ce.save_model: True,
     _ce.epochs: 5,
     # _ce.epoch_iter: 100,
@@ -200,5 +248,7 @@ default_values = {
     # _ce.ids: self_data_path + 'rexT/filtered.json',
     _ce.ids: None,
     _ce.indexer_type: 'idxDefaultIndexer',
-    _ce.save_type: 'segments'
+    _ce.save_type: 'segments',
+    _ce.random_init: False,
+    _ce.config: {}
 }

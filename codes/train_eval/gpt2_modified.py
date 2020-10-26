@@ -1,5 +1,3 @@
-import math
-
 import torch
 from torch import nn
 from torch.nn import CrossEntropyLoss
@@ -24,8 +22,6 @@ class GPT2REModel(GPT2PreTrainedModel):
         self.ent = nn.Linear(config.n_embd, config.n_embd)
         self.pos = nn.Linear(config.n_embd, config.n_embd)
 
-        self.init_weights()
-
     def get_input_embeddings(self):
         return self.wte
 
@@ -39,29 +35,40 @@ class GPT2REModel(GPT2PreTrainedModel):
         for layer, heads in heads_to_prune.items():
             self.h[layer].attn.prune_heads(heads)
 
-    def forward(self, input_ids, attention_mask, position_ids, token_type_ids, past=None):
+    def forward(self, input_ids, attention_mask=None, position_ids=None, token_type_ids=None, past=None):
         device = input_ids.device
 
         inputs_embeds = torch.zeros(*input_ids.shape, self.wte.embedding_dim, dtype=self.wte.weight.dtype,
                                     device=device)
         position_embeds = torch.zeros(*inputs_embeds.shape, dtype=self.wpe.weight.dtype, device=device)
-        token_type_embeds = self.wte(token_type_ids)
 
-        for i in range(input_ids.shape[0]):
-            inp = input_ids[i]
-            pos = position_ids[i]
-            type_id = token_type_ids[i]
-            e1, e2 = inp[type_id == 0], inp[type_id == 1]
-            ep1, ep2 = pos[type_id == 0], pos[type_id == 1]
-            e1e, e2e = self.wte(e1), self.wte(e2)
-            e1p, e2p = self.wpe(ep1), self.wpe(ep2)
-            embd = self.ent(torch.cat((e1e, e2e)))
-            pos_embd = self.pos(torch.cat((e1p, e2p)))
-            if 2 in type_id:
-                embd = torch.cat((embd, self.wte(inp[type_id == 2])))
-                pos_embd = torch.cat((pos_embd, self.wpe(pos[type_id == 2])))
-            inputs_embeds[i] = embd
-            position_embeds[i] = pos_embd
+        token_type_embeds = 0
+        if token_type_ids is not None:
+            token_type_embeds = self.wte(token_type_ids)
+
+        if token_type_ids is not None and position_ids is not None:
+            for i in range(input_ids.shape[0]):
+                inp = input_ids[i]
+                type_id = token_type_ids[i]
+                e1, e2 = inp[type_id == 0], inp[type_id == 1]
+                pos = position_ids[i]
+                ep1, ep2 = pos[type_id == 0], pos[type_id == 1]
+                e1e, e2e = self.wte(e1), self.wte(e2)
+                e1p, e2p = self.wpe(ep1), self.wpe(ep2)
+                embd = self.ent(torch.cat((e1e, e2e)))
+                pos_embd = self.pos(torch.cat((e1p, e2p)))
+                if 2 in type_id:
+                    embd = torch.cat((embd, self.wte(inp[type_id == 2])))
+                    pos_embd = torch.cat((pos_embd, self.wpe(pos[type_id == 2])))
+                inputs_embeds[i] = embd
+                position_embeds[i] = pos_embd
+
+        if position_ids is None:
+            position_ids = torch.arange(0, input_ids.shape[1], dtype=torch.long)
+            position_ids = torch.stack([position_ids] * input_ids.shape[0], 0)
+            position_ids = position_ids.to(device)
+            # print(position_ids.device, input_ids.device)
+            position_embeds = self.wpe(position_ids)
 
         # print(inputs_embeds.shape, position_embeds.shape, token_type_embeds.shape, attention_mask.shape)
         if attention_mask is not None:
@@ -72,6 +79,9 @@ class GPT2REModel(GPT2PreTrainedModel):
             attention_mask = (attention_mask - 1.0) * 10000.0
 
         # print(e1_mask.shape, e2_mask.shape, attention_mask.shape)
+        # token_type_ids[token_type_ids == 1] = 0
+        # token_type_ids[token_type_ids == 2] = 1
+        # token_type_embeds = self.wte(token_type_ids)
         hidden_states = inputs_embeds + position_embeds + token_type_embeds
         hidden_states = self.drop(hidden_states)
 
@@ -133,6 +143,7 @@ class GPT2LMREModel(GPT2PreTrainedModel):
 
     def forward(self, input_ids, attention_mask=None, position_ids=None, token_type_ids=None, labels=None, past=None):
         from global_constants import ignore_index
+
         transformer_outputs = self.transformer(input_ids=input_ids, attention_mask=attention_mask,
                                                position_ids=position_ids, token_type_ids=token_type_ids, past=past)
         hidden_states = transformer_outputs[0]

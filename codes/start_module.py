@@ -9,7 +9,7 @@ import transformers as tfm
 from libs import get_config, get_module_from_parallel, get_params
 from libs import initial_loggers, log_info, cuda_mem_in_mb
 from libs import loggers
-from train_eval import train, evaluate, eval_sequences, gpt2_eval
+from train_eval import evaluate
 
 
 def save_torch(obj, file_path):
@@ -24,7 +24,8 @@ def save_torch(obj, file_path):
 
 
 def start_func(config):
-    from global_constants import data_process_func
+    import global_constants
+    from global_constants import data_process_func, main_methods
     from global_constants import ModelEnums, DatasetEnums, TrainModesEnums, ConfigEnums, DataIndexerEnums
     me, de, tme, ce, di = ModelEnums, DatasetEnums, TrainModesEnums, ConfigEnums, DataIndexerEnums
     config = {ce[k]: v for k, v in config.items() if k in ce.__members__}
@@ -33,9 +34,17 @@ def start_func(config):
     fields = mode.value.fields
     con = {k: get_config(config, k) for k in fields}
     # print(con)
-    model_type = me[con[ce.model]]
+    model_warp = me[con[ce.model]]
+    # print(model_warp)
+    model_type = model_warp.value.model
+    model_config_type = model_warp.value.config
     load_path = get_config(con, ce.load_path)
     save_path = get_config(con, ce.save_path)
+
+    cal = get_config(con, ce.cal)
+    if cal == 'cpu':
+        global_constants.main_device = torch.device('cpu')
+    main_device = global_constants.main_device
 
     if save_path is not None:
         if save_path[-1] != '/':
@@ -63,14 +72,32 @@ def start_func(config):
     # log_info(cuda_logger, 'GPU Free {} Used {} Total {}'.format(gpu.memoryFree, gpu.memoryUsed, gpu.memoryTotal))
     log_info(cuda_logger, 'Start cuda memory {}'.format(cuda_mem_in_mb()))
     log_info(cuda_logger, 'Allocated model {}'.format(cuda_mem_in_mb()))
-    model = model_type.value.from_pretrained(load_path)
+
+    model_config, model_kwargs = model_config_type.from_pretrained(
+        load_path,
+        return_unused_kwargs=True,
+    )
+
+    config_model_config = con[ce.config]
+
+    for k, v in config_model_config.items():
+        setattr(model_config, k, v)
+    model = model_type.from_pretrained(load_path, config=model_config, **model_kwargs)
+
+    if not (ce.random_init in con and con[ce.random_init]):
+        log_info(prepare_logger, 'Model weight initialized')
+        model.init_weights()
 
     dataset_type = de[con[ce.dataset_type]]
     indexer_type = di[con[ce.indexer_type]].value
     # print(indexer_type, type(indexer_type), repr(indexer_type))
     dataset_class = dataset_type.value.class_type
-    con[ce.data_func] = data_process_func[mode][model_type] \
+    # print(data_process_func[mode][model_type], dataset_type)
+    con[ce.data_func] = data_process_func[mode][model_warp] \
         [dataset_type](max_len=con[ce.max_len], batch_size=con[ce.batch_size] if ce.batch_size in con else 1)
+    con[ce.method] = main_methods[mode][model_warp]
+    # print(config[ce.method])
+
     con[ce.dataset_type] = dataset_class
     con[ce.tokenizer] = tok
     con[ce.model] = model
@@ -79,7 +106,10 @@ def start_func(config):
     method = mode.value.func
 
     dataset_parameters = {k.name: con[k] for k in dataset_type.value.fields}
-
+    # print(model.cls_head)
+    # print(model.cls_head.weight.device, model.cls_head.bias.device)
+    # model.to(torch.device('cpu'))
+    model.to(main_device)
     data_indexer = indexer_type(**dataset_parameters)
     con[ce.data_indexer] = data_indexer
     save_type = con[ce.save_type]
@@ -99,6 +129,7 @@ def start_func(config):
             # ds = new_con[ce.dataset]
             new_con[ce.epoch_iter] = len(new_con[ce.dataset]) // (
                 new_con[ce.batch_size] if ce.batch_size in new_con else 1)
+            # print(1, new_con[ce.method], con[ce.method])
             new_model, loss = method(new_con, i)
             con[ce.model] = new_model
             con[ce.prev_eval_loss] = loss
@@ -111,12 +142,15 @@ def start_func(config):
                 new_con = dict(con)
                 new_con[ce.dataset] = data_indexer.get_dataset(i, tokenizer=tok, dataset_type=dataset_class,
                                                                batch_len=con[ce.batch_len])
-                if new_con[ce.dataset_type] is None:
+                if new_con[ce.dataset] is None:
                     break
                 new_con[ce.epoch_iter] = len(new_con[ce.dataset]) // (
                     new_con[ce.batch_size] if ce.batch_size in new_con else 1)
-                if i != epochs - 1:
-                    new_con[ce.save_model] = False
+                # if i != loaders - 1:
+                #     new_con[ce.save_model] = False
+                # else:
+                #     new_con[ce.save_model] = True
+
                 new_model, loss = method(new_con, e)
                 con[ce.model] = new_model
                 con[ce.prev_eval_loss] = loss
@@ -126,8 +160,12 @@ def start_func(config):
 
 def single_train(config, index):
     print(index)
-    from global_constants import ConfigEnums, main_device
+    import global_constants
+    from global_constants import ConfigEnums
     ce = ConfigEnums
+
+    main_device = global_constants.main_device
+
     save_path = config[ce.save_path]
     save_model = config[ce.save_model]
 
@@ -137,8 +175,9 @@ def single_train(config, index):
     final_logger = loggers.final_logger
     model_state = config[ce.model].state_dict()
     # print(list(model_state.keys()))
-    train_params = get_params(config, train)
-    new_model, train_losses = train(**train_params)
+    method = config[ce.method]
+    train_params = get_params(config, method)
+    new_model, train_losses = method(**train_params)
     new_model = get_module_from_parallel(new_model)
     config[ce.dataset] = config[ce.evalset]
     eval_params = get_params(config, evaluate)
@@ -154,8 +193,11 @@ def single_train(config, index):
     #     loss = config[ce.prev_eval_loss]
     # else:
     #     config[ce.prev_eval_loss] = loss
+    log_info(final_logger, 'save_model: {}'.format(save_model))
     if save_path is not None:
+        # log_info(final_logger, '{},{}'.format(save_model, refuse))
         if save_model and not refuse:
+            log_info(final_logger, config[ce.save_type])
             new_model = get_module_from_parallel(new_model)
             tokenizer = get_module_from_parallel(config[ce.tokenizer])
             if config[ce.save_type] == 'segments':
@@ -163,6 +205,7 @@ def single_train(config, index):
                 new_model.save_pretrained(save_path)
                 tokenizer.save_pretrained(save_path)
             elif config[ce.save_type] == 'epochs':
+                log_info(final_logger, 'saving trained models: ' + save_path)
                 save_path2 = save_path + '/' + str(index)
                 if not os.path.isdir(save_path2):
                     os.mkdir(save_path2)
@@ -188,14 +231,22 @@ def single_train(config, index):
 
 def single_sequence_generation(config, index):
     print(index)
-    from global_constants import ConfigEnums, main_device
+    import global_constants
+    from global_constants import ConfigEnums
+
+    main_device = global_constants.main_device
+
     ce = ConfigEnums
+    # print(2, config[ce.method])
     save_path = config[ce.save_path]
+    print('save', save_path)
     config[ce.model] = config[ce.model].to(main_device)
     config[ce.gpt2] = config[ce.gpt2].to(main_device)
     final_logger = loggers.final_logger
-    eval_params = get_params(config, eval_sequences)
-    ratios = eval_sequences(**eval_params)
+    method = config[ce.method]
+    # print(method)
+    eval_params = get_params(config, method)
+    ratios = method(**eval_params)
     if save_path is not None:
         log_path = list(os.path.split(save_path)[:-1])
         log_path.append('log')
@@ -210,14 +261,18 @@ def single_sequence_generation(config, index):
 
 
 def gpt2_model_eval(config, index):
-    from global_constants import ConfigEnums, main_device
+    import global_constants
+    from global_constants import ConfigEnums
+    main_device = global_constants.main_device
+
     ce = ConfigEnums
     save_path = config[ce.save_path]
     config[ce.model] = config[ce.model].to(main_device)
     config[ce.gpt2] = config[ce.gpt2].to(main_device)
     final_logger = loggers.final_logger
-    eval_params = get_params(config, gpt2_eval)
-    ratios = gpt2_eval(**eval_params)
+    method = config[ce.method]
+    eval_params = get_params(config, method)
+    ratios = method(**eval_params)
     if save_path is not None:
         log_path = list(os.path.split(save_path)[:-1])
         log_path.append('log')

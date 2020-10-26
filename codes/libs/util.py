@@ -1,8 +1,8 @@
 import inspect
-import traceback
-from typing import Sequence
 import time
+import traceback
 from datetime import datetime
+from typing import Sequence
 
 import numpy as np
 import torch
@@ -68,6 +68,20 @@ def safe_sql(cursor, command, arguments=None, fetch='all', size=1):
                 if 'lock' not in str(e):
                     break
         continue
+
+
+def tensor_lindex(ori, dst):
+    ori = ori.tolist()
+    dst = dst.tolist()
+
+    for i in range(len(ori)):
+        if ori[i] == dst[0]:
+            for j in range(len(dst)):
+                if ori[i + j] != dst[j]:
+                    break
+                elif j == len(dst) - 1:
+                    return i
+    return -1
 
 
 def split_array(arr, block=1000):
@@ -158,11 +172,16 @@ def get_module_from_parallel(module):
     return module
 
 
-def type_ids(length, index=0, dtype=torch.long):
+def type_ids(length, index=0, dtype=torch.long, device=None):
+    if device is not None:
+        return torch.zeros(length, dtype=dtype, device=device) + index
+
     return torch.zeros(length, dtype=dtype) + index
 
 
-def pos_id(length):
+def pos_id(length, device=None):
+    if device is not None:
+        return torch.arange(0, length, dtype=torch.long, device=device)
     return torch.arange(0, length, dtype=torch.long)
 
 
@@ -229,6 +248,38 @@ def process_re_data(data):
             'labels': labels}
 
 
+def process_cls_data(data):
+    from global_constants import eos_id, ignore_index
+    result_ids = [x[0] for x in data]
+
+    device = result_ids[0].device
+
+    for x in result_ids:
+        x.to(device)
+
+    attns = []
+    tokens = []
+    poses = []
+    labels = []
+
+    for i in range(len(data)):
+        s = result_ids[i]
+        l = len(s)
+        attns.append(type_ids(l, index=1, dtype=torch.float, device=device))
+        tokens.append(type_ids(l, index=0, device=device))
+        poses.append(pos_id(l, device=device))
+        labels.append(torch.zeros(1, dtype=torch.long, device=device))
+        labels[-1][0] = data[i][1]
+
+    result_ids = cat_tensors(result_ids, padding=eos_id)
+    poses = cat_tensors(poses)
+    tokens = cat_tensors(tokens)
+    attns = cat_tensors(attns)
+    labels = cat_tensors(labels, padding=ignore_index)
+    return {'input_ids': result_ids, 'attention_mask': attns, 'token_type_ids': tokens, 'position_ids': poses,
+            'labels': labels}
+
+
 def get_re_data(data, max_len=np.inf, batch_size=32):
     empty = torch.zeros(0, dtype=torch.long)
     e1_data, e2_data = [], []
@@ -273,26 +324,35 @@ def get_re_data(data, max_len=np.inf, batch_size=32):
 
 
 def get_model_output(model, data):
-    from global_constants import main_device
+    import global_constants
     # device = torch.device('cuda:0')
     # for k, v in data.items():
     #     print(k, v)
+
+    # for i in data:
+    #     data[i] = data[i].cuda()
+
     for i in data:
         if data[i] is not None and isinstance(data[i], torch.Tensor):
             req_grad = data[i].requires_grad
-            data[i] = data[i].clone().detach().requires_grad_(req_grad).to(main_device)
+            data[i] = data[i].clone().detach().requires_grad_(req_grad).to(global_constants.main_device)
+    # for k, v in data.items():
+    #     print(k, v.shape, v.device)
     # print([x.device for x in data.values()])
     # print(data)
     try:
         output = model(**data)
         return output
     except Exception as e:
-        print('data: ', data)
+        print(e)
+        # print('data: ', data)
+        print('error begin')
         for k, v in data.items():
-            print(k, v.shape)
+            print(k, v, v.shape, v.dtype)
         print([x.device for x in data.values() if x is not None])
         print(traceback.print_exc())
-        exit()
+        # exit()
+        return None
 
 
 def save_checkpoint(save_path, check_point):
@@ -345,3 +405,28 @@ def get_config(config, item):
 def del_key(d, k):
     if k in d:
         del d[k]
+
+
+def str_index_warp(self, sub):
+    try:
+        return self.index(sub)
+    except:
+        return -1
+
+
+def chop_between(ori, e1, e2, index_func=str_index_warp, include=True):
+    e1i, e2i = index_func(ori, e1), index_func(ori, e2)
+    if e1i != -1 and e2i != -1:
+        if e1i > e2i:
+            start = e2i + len(e2)
+            end = e1i
+            l1, l2 = len(e2), len(e1)
+        else:
+            start = e1i + len(e1)
+            end = e2i
+            l1, l2 = len(e1), len(e2)
+        if include:
+            start -= l1
+            end += l2
+        return ori[start:end]
+    return None

@@ -1,4 +1,4 @@
-import inspect
+from typing import Sequence
 
 import numpy as np
 import torch
@@ -16,21 +16,26 @@ def top_k_top_p_filtering(logits, top_k=0, filter_value=-np.inf):
     return logits
 
 
-def _get_next_logits(model, inputs, generated, num_samples=1, temperature=1, top_k=0, repetition_penalty=1.0):
+def _get_next_logits(model, inputs, generated, num_samples=1, temperature=1, top_k=40, repetition_penalty=1.0):
     # from global_constants import eos_id
     del_key(inputs, 'labels')
     del_key(inputs, 'attention_mask')
     outputs = get_model_output(model, inputs)
     past = outputs[1]
-    next_token_logits = outputs[0][:, -1, :] / (temperature if temperature > 0 else 1.)
-    # repetition penalty from CTRL (https://arxiv.org/abs/1909.05858)
-    for i in range(num_samples):
-        for _ in set(generated[i].tolist()):
-            next_token_logits[i, _] /= repetition_penalty
-    filtered_logits = top_k_top_p_filtering(next_token_logits, top_k=top_k)
-    if temperature == 0:  # greedy sampling:
-        return filtered_logits
-    return F.softmax(filtered_logits, dim=-1), past
+    # print(outputs[0], outputs[0].shape)
+    # print([(i, x.shape) for i, x in enumerate(outputs)])
+    if len(outputs[0].shape) == 3:
+        next_token_logits = outputs[0][:, -1, :] / (temperature if temperature > 0 else 1.)
+        # repetition penalty from CTRL (https://arxiv.org/abs/1909.05858)
+        for i in range(num_samples):
+            for _ in set(generated[i].tolist()):
+                next_token_logits[i, _] /= repetition_penalty
+        filtered_logits = top_k_top_p_filtering(next_token_logits, top_k=top_k)
+        if temperature == 0:  # greedy sampling:
+            return filtered_logits
+        return F.softmax(filtered_logits, dim=-1), past
+    else:
+        return F.softmax(outputs[0], dim=-1), past
 
 
 def get_seq_prob(model, data, data_func=lambda x: get_tensor_batch(x, batch_size=1, max_len=np.inf)):
@@ -49,16 +54,16 @@ def get_seq_prob(model, data, data_func=lambda x: get_tensor_batch(x, batch_size
                 continue
             e1l, e2l = e1.shape[0], e2.shape[0]
             pre_len = e1l + e2l
-            # index_e1 = get_index(sent, e1) + pre_len
+            index_e1 = get_index(sent, e1) + pre_len
             index_e2 = get_index(sent, e2) + pre_len
 
-            # sub_output_e1 = output[index_e1:index_e1 + e1l]
+            sub_output_e1 = output[index_e1:index_e1 + e1l]
             sub_output_e2 = output[index_e2:index_e2 + e2l]
             prob_e1, prob_e2 = np.zeros(e1l), np.zeros(e2l)
             # print(1)
             # print(sub_output_e2.max(), sub_output_e2.min())
-            # for e1i in range(e1l):
-            #     prob_e1[e1i] = sub_output_e1[e1i][e1[e1i]].item()
+            for e1i in range(e1l):
+                prob_e1[e1i] = sub_output_e1[e1i][e1[e1i]].item()
             for e2i in range(e2l):
                 # try:
                 prob_e2[e2i] = sub_output_e2[e2i][e2[e2i]].item()
@@ -69,8 +74,8 @@ def get_seq_prob(model, data, data_func=lambda x: get_tensor_batch(x, batch_size
     return probs
 
 
-def _sample_sequence(model, length, data, generated, num_samples=1, temperature=1, top_k=0, repetition_penalty=1.0,
-                     data_func=lambda x: process_re_data(x)):
+def _sample_sequence(model, length, data, generated, num_samples=1, temperature=1, top_k=40, repetition_penalty=1.0,
+                     data_func=lambda x: process_re_data(x), tid=2):
     model.eval()
     next_input = data_func(data)
     pos_id = 0
@@ -82,22 +87,25 @@ def _sample_sequence(model, length, data, generated, num_samples=1, temperature=
             next_logits, past = _get_next_logits(model, next_input, generated, num_samples=num_samples,
                                                  temperature=temperature, top_k=top_k,
                                                  repetition_penalty=repetition_penalty)
-            if temperature == 0:  # greedy sampling:
-                next_token = torch.argmax(next_logits, dim=-1).unsqueeze(-1)
+            if len(next_logits.shape) == 3:
+                if temperature == 0:  # greedy sampling:
+                    next_logits = torch.argmax(next_logits, dim=-1).unsqueeze(-1)
+                else:
+                    next_logits = torch.multinomial(next_logits, num_samples=1)
+                next_input = {'input_ids': next_logits,
+                              'token_type_ids': torch.zeros((num_samples, 1), dtype=np.long) + tid,
+                              'position_ids': torch.zeros((num_samples, 1), dtype=np.long) + pos_id,
+                              'past': past}
+                pos_id += 1
+                generated = torch.cat((generated, next_logits), dim=1)
             else:
-                next_token = torch.multinomial(next_logits, num_samples=1)
-            next_input = {'input_ids': next_token,
-                          'token_type_ids': torch.zeros((num_samples, 1), dtype=np.long) + 2,
-                          'position_ids': torch.zeros((num_samples, 1), dtype=np.long) + pos_id,
-                          'past': past}
-            pos_id += 1
-            generated = torch.cat((generated, next_token), dim=1)
+                return next_logits
     return generated
 
 
-def sample_sequence_entity(model, length, e1, e2, num_samples=1, temperature=1, top_k=5, repetition_penalty=1.0):
-    from global_constants import main_device
-    device = main_device
+def sample_sequence_entity(model, length, e1, e2, num_samples=1, temperature=1, top_k=40, repetition_penalty=1.0):
+    import global_constants
+    device = global_constants.main_device
     if isinstance(e1, torch.Tensor):
         device = e1.device
     generated = torch.zeros(num_samples, 0).long().to(device)
@@ -112,17 +120,38 @@ def sample_sequence_entity(model, length, e1, e2, num_samples=1, temperature=1, 
     return generated
 
 
-def sample_sequence(model, length, data, num_samples=1, temperature=1, top_k=0, repetition_penalty=1.0):
-    from global_constants import main_device
-    device = main_device
-    if isinstance(data['e1'], torch.Tensor):
-        device = data['e1'].device
+def sample_sequence(model, length, data, num_samples=1, temperature=1, top_k=40, repetition_penalty=1.0,
+                    data_func=lambda x: x, tid=2):
+    import global_constants
+    device = global_constants.main_device
+    if isinstance(data, dict):
+        if isinstance(list(data.values())[0], torch.Tensor):
+            device = list(data.values())[0].device
+    elif isinstance(data, Sequence):
+        if isinstance(list(data)[0], torch.Tensor):
+            device = list(data)[0].device
     context = torch.zeros((num_samples, 0), dtype=torch.long).to(device)
-    params = inspect.signature(model.__call__)
-    for k in data:
-        if k not in params:
-            del_key(data, k)
+    # params = inspect.signature(model.__call__)
+    # print(type(model))
+    # print(model)
+    # for k in data:
+    #     if k not in params:
+    #         del_key(data, k)
     generated = _sample_sequence(model, length, data, context, num_samples=num_samples, temperature=temperature,
                                  top_k=top_k, repetition_penalty=repetition_penalty,
-                                 data_func=lambda x: get_tensor_batch(x, batch_size=1, max_len=np.inf))
+                                 data_func=data_func, tid=tid)
+    # data_func=lambda x: get_tensor_batch(x, batch_size=1, max_len=np.inf))
     return generated
+
+
+def sample_classifier_sequence(model, data, num_samples=1, temperature=1, top_k=40, repetition_penalty=1.0,
+                               data_func=lambda x: x):
+    # print(data.shape)
+    generated = sample_sequence(model, length=1, data=data, num_samples=num_samples, temperature=temperature,
+                                top_k=top_k, repetition_penalty=repetition_penalty, data_func=data_func, tid=0)
+    result = []
+    for i in range(len(generated)):
+        item = generated[i]
+        # print(item)
+        result.append((item.argmax().item(), item.max().item()))
+    return result
