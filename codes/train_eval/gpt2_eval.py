@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import torch
 import transformers as tfm
+from torch import nn
 from torch.utils.data import DataLoader
 
 from libs import get_column, get_index
@@ -19,7 +20,7 @@ def eval_prob_one_epoch(dataloader, gpt2, model, length, num_samples, data_proce
     import global_constants
     main_device = global_constants.main_device
     result = pd.DataFrame(columns=['e1', 'e2', 'sent', 'log_prod_prob_e1', 'log_prod_prob_e2', 'sample_sent', 'rev'])
-    result_non = pd.DataFrame(columns=['e1', 'e2', 'sent', 'sample_sent', 'rev'])
+    # result_non = pd.DataFrame(columns=['e1', 'e2', 'sent', 'sample_sent', 'rev'])
     sample_logger = loggers.sample_logger
     max_sample = 32
     divs = num_samples // max_sample
@@ -89,17 +90,18 @@ def eval_prob_one_epoch(dataloader, gpt2, model, length, num_samples, data_proce
                         # res_data['loss'].extend(get_column(probs, 2))
 
                 sl_non = len(sents_non)
-                res_non_data = {'e1': [idx[0]] * sl_non, 'e2': [idx[1]] * sl_non, 'sent': sents_non,
-                                'sample_sent': [idx[2]] * sl_non, 'rev': [rev] * sl_non}
+                # res_non_data = {'e1': [idx[0]] * sl_non, 'e2': [idx[1]] * sl_non, 'sent': sents_non,
+                #                 'sample_sent': [idx[2]] * sl_non, 'rev': [rev] * sl_non}
 
                 result = pd.concat([result, pd.DataFrame(res_data)])
-                result_non = pd.concat([result_non, pd.DataFrame(res_non_data)])
+                # result_non = pd.concat([result_non, pd.DataFrame(res_non_data)])
                 print('eval_time: {}'.format(time.time() - eval_time))
                 log_info(sample_logger, 'Sampled {} sents for e1 {}, e2 {}'.format(len(sents),
                                                                                    tokenizer.decode(e1.tolist()),
                                                                                    tokenizer.decode(e2.tolist())))
             print('tot time: {}, avg: {}'.format(time.time() - step_time, (time.time() - step_time) / num_samples))
-    return {'result': result, 'result_non': result_non}
+    # return {'result': result, 'result_non': result_non}
+    return result
 
 
 def eval_sequences(gpt2, model, dataset, num_samples, max_len, data_func=lambda x: x, tokenizer=None):
@@ -156,7 +158,7 @@ def evaluate(model, dataset, batch_size, epochs, data_func=lambda x: x):
     return perplexity, torch.tensor(perplexities), torch.tensor(losses)
 
 
-def gpt2_eval_one_epoch(dataloader, gpt2, model, data_func):
+def gpt2_eval_one_epoch(dataloader: DataLoader, gpt2: nn.Module, model: nn.Module, data_func):
     sample_logger = loggers.sample_logger
     # ratio_prod, ratio_avg = [], []
     # gpt2_prod, gpt2_avg = [], []
@@ -214,7 +216,8 @@ def gpt2_eval_one_epoch(dataloader, gpt2, model, data_func):
     return pd.DataFrame(ratio_prob), pd.DataFrame(gpt2_prob)
 
 
-def gpt2_eval(gpt2, model, dataset, batch_size=32, data_func=lambda x: x):
+def gpt2_eval(gpt2: nn.Module, model: nn.Module, dataset: torch.utils.data.Dataset, batch_size: int = 32,
+              data_func=lambda x: x):
     sample_logger = loggers.sample_logger
     data_loader = DataLoader(dataset, shuffle=False, batch_size=batch_size, collate_fn=lambda x: x)
     re_prob, gpt2_prob = gpt2_eval_one_epoch(data_loader, gpt2, model, data_func)
@@ -223,14 +226,16 @@ def gpt2_eval(gpt2, model, dataset, batch_size=32, data_func=lambda x: x):
     return result
 
 
-def classifier_eval(model, dataset, num_samples, data_func=lambda x: x, tokenizer=None):
+def classifier_eval(model: nn.Module, dataset: torch.utils.data.Dataset, num_samples: int, data_func=lambda x: x,
+                    tokenizer: tfm.PreTrainedTokenizer = None):
     # sampler_logger = loggers.sample_logger
     data_loader = DataLoader(dataset, shuffle=False, batch_size=1, collate_fn=lambda x: x)
     result = classifier_eval_one_epoch(data_loader, model, num_samples, data_func, tokenizer)
     return result
 
 
-def classifier_eval_one_epoch(dataloader, model, num_samples, data_process_func, tokenizer=None):
+def classifier_eval_one_epoch(dataloader: DataLoader, model: nn.Module, num_samples: int,
+                              data_process_func, tokenizer: tfm.PreTrainedTokenizer = None):
     import global_constants
     main_device = global_constants.main_device
     result = pd.DataFrame(columns=['e1', 'e2', 'sent', 'label', 'prob', 'sample_sent'])
@@ -262,9 +267,12 @@ def classifier_eval_one_epoch(dataloader, model, num_samples, data_process_func,
             gen_time = time.time()
             sent = sent.unsqueeze(0)
             sent = sent.to(main_device)
+            if sent.shape[-1] == 0:
+                continue
             sent = {'input_ids': sent}
             print('sampling {}, {}'.format(e1l, e2l))
-            label = sample_classifier_sequence(model, sent, num_samples=1, top_k=5, data_func=lambda x: x)
+
+            label = sample_classifier_sequence(model, sent)
             print('gen_time: {}'.format(time.time() - gen_time))
             # print(sent)
             eval_time = time.time()

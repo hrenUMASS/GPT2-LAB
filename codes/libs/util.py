@@ -2,11 +2,13 @@ import inspect
 import time
 import traceback
 from datetime import datetime
-from typing import Sequence
+from sqlite3 import Cursor
+from typing import Sequence, Union, Iterable
 
 import numpy as np
 import torch
-from torch import nn
+import transformers as tfm
+from torch import nn, Tensor
 
 from . import loggers
 from .loggers import log_info
@@ -16,7 +18,7 @@ def get_column(arr, index):
     return [item[index] for item in arr]
 
 
-def get_index(ori, comp):
+def get_index(ori: Tensor, comp: Tensor):
     # print('index', ori, comp)
     if ori.shape[0] < comp.shape[0]:
         return -1
@@ -33,7 +35,7 @@ def get_index(ori, comp):
     return index
 
 
-def safe_sql(cursor, command, arguments=None, fetch='all', size=1):
+def safe_sql(cursor: Cursor, command: str, arguments: Sequence = None, fetch: str = 'all', size: int = 1):
     prepare_logger = loggers.prepare_logger
     start_time = time.time()
     dtn = datetime.now()
@@ -70,7 +72,7 @@ def safe_sql(cursor, command, arguments=None, fetch='all', size=1):
         continue
 
 
-def tensor_lindex(ori, dst):
+def tensor_lindex(ori: Tensor, dst: Tensor):
     ori = ori.tolist()
     dst = dst.tolist()
 
@@ -84,7 +86,7 @@ def tensor_lindex(ori, dst):
     return -1
 
 
-def split_array(arr, block=1000):
+def split_array(arr: Union[Sequence, Iterable], block: int = 1000):
     arr = list(arr)
     seg = len(arr) // block
     if seg * block != len(arr):
@@ -95,14 +97,14 @@ def split_array(arr, block=1000):
     return res
 
 
-def in_tensor(ori, dst):
+def in_tensor(ori: Tensor, dst: Tensor):
     ori = ori.tolist()
     dst = dst.tolist()
     n = len(dst)
     return any(dst == ori[i:i + n] for i in range(len(ori) - n + 1))
 
 
-def encode(tokenizer, elem, add_eos=False, **kwargs):
+def encode(tokenizer: tfm.PreTrainedTokenizer, elem: str, add_eos: bool = False, **kwargs):
     if isinstance(elem, str):
         result = tokenizer.encode(text=elem, return_tensors='pt', **kwargs).long()
         # print(result)
@@ -115,7 +117,7 @@ def encode(tokenizer, elem, add_eos=False, **kwargs):
         return torch.tensor(tokenizer.convert_tokens_to_ids(elem))
 
 
-def get_tensor_batch(batch, batch_size=32, max_len=512):
+def get_tensor_batch(batch: Union[dict, Tensor], batch_size: int = 32, max_len: int = 512):
     if isinstance(batch, dict):
         batch = batch['sent']
     from global_constants import eos_id, ignore_index
@@ -218,7 +220,7 @@ def process_re_data(data):
             e1p, e2p = pos_id(e1l), pos_id(e2l)
             e1a, e2a = type_ids(e1l, index=1, dtype=torch.float), type_ids(e2l, index=1, dtype=torch.float)
             ids = torch.cat((e1, e2))
-            token = torch.cat((type_ids(e1l, index=1), type_ids(e2l, index=1)))
+            token = torch.cat((type_ids(e1l, index=0), type_ids(e2l, index=0)))
             pos = torch.cat((e1p, e2p))
             attn = torch.cat((e1a, e2a))
             lab = torch.cat((e1, e2))
@@ -228,7 +230,7 @@ def process_re_data(data):
             inp = pos_id(inl)
             ina = type_ids(inl, index=1, dtype=torch.float)
             ids = torch.cat((ids, in_ids))
-            token = torch.cat((token, type_ids(in_ids.shape[0], index=2)))
+            token = torch.cat((token, type_ids(in_ids.shape[0], index=1)))
             pos = torch.cat((pos, inp))
             attn = torch.cat((attn, ina))
             lab = torch.cat((lab, in_ids))
@@ -323,7 +325,7 @@ def get_re_data(data, max_len=np.inf, batch_size=32):
     return result
 
 
-def get_model_output(model, data):
+def get_model_output(model: nn.Module, data: dict) -> torch.Tensor:
     import global_constants
     # device = torch.device('cuda:0')
     # for k, v in data.items():

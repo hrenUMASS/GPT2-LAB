@@ -26,7 +26,7 @@ class GPT2REClsModel(GPT2PreTrainedModel):
         hid = hidden_states.mean(axis=1)
         # print(self.lm_head)
         cls_logits = self.cls_head(hid)
-
+        # print(cls_logits)
         outputs = (cls_logits,) + transformer_outputs[1:]
         if labels is not None:
             # Shift so that tokens < n predict n
