@@ -4,7 +4,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from libs import process_re_data, get_model_output, get_tensor_batch, get_index, del_key
+from libs import process_re_data, get_model_output, get_tensor_batch, get_index, del_key, type_ids
 
 
 def top_k_top_p_filtering(logits, top_k=0, filter_value=-np.inf):
@@ -16,15 +16,13 @@ def top_k_top_p_filtering(logits, top_k=0, filter_value=-np.inf):
     return logits
 
 
-def _get_next_logits(model, inputs, generated, num_samples=1, temperature=1, top_k=40, repetition_penalty=1.0):
+def _get_next_logits(model, inputs, generated, num_samples=1, temperature=1, top_k=5, repetition_penalty=1.0):
     # from global_constants import eos_id
     del_key(inputs, 'labels')
     del_key(inputs, 'attention_mask')
+    # print(inputs)
     outputs = get_model_output(model, inputs)
     past = outputs[1]
-    # print(outputs[0], outputs[0].shape)
-    # print([(i, x.shape) for i, x in enumerate(outputs)])
-    # if len(outputs[0].shape) == 3:
 
     next_token_logits = outputs[0][:, -1, :] / (temperature if temperature > 0 else 1.)
     # repetition penalty from CTRL (https://arxiv.org/abs/1909.05858)
@@ -73,11 +71,13 @@ def get_seq_prob(model, data, data_func=lambda x: get_tensor_batch(x, batch_size
     return probs
 
 
-def _sample_sequence(model, length, data, generated, num_samples=1, temperature=1, top_k=40, repetition_penalty=1.0,
-                     data_func=lambda x: process_re_data(x), tid=1, keep_logit=False):
+def _sample_sequence(model, length, data, generated, num_samples=1, temperature=1, top_k=5, repetition_penalty=1.0,
+                     data_func=lambda x: process_re_data(x), tid=0):
     model.eval()
     next_input = data_func(data)
+    # print(next_input)
     pos_id = 0
+    print(next_input)
     if next_input is None:
         return None
     with torch.no_grad():
@@ -86,22 +86,21 @@ def _sample_sequence(model, length, data, generated, num_samples=1, temperature=
             next_logits, past = _get_next_logits(model, next_input, generated, num_samples=num_samples,
                                                  temperature=temperature, top_k=top_k,
                                                  repetition_penalty=repetition_penalty)
-            if not keep_logit:
-                # if len(next_logits.shape) == 3:
-                if temperature == 0:  # greedy sampling:
-                    next_logits = torch.argmax(next_logits, dim=-1).unsqueeze(-1)
-                else:
-                    next_logits = torch.multinomial(next_logits, num_samples=1)
-                next_input = {'input_ids': next_logits,
-                              'token_type_ids': torch.zeros((num_samples, 1), dtype=np.long) + tid,
-                              'position_ids': torch.zeros((num_samples, 1), dtype=np.long) + pos_id,
-                              'past': past}
-                pos_id += 1
+            # if len(next_logits.shape) == 3:
+            if temperature == 0:  # greedy sampling:
+                next_logits = torch.argmax(next_logits, dim=-1).unsqueeze(-1)
+            else:
+                next_logits = torch.multinomial(next_logits, num_samples=1)
+            next_input = {'input_ids': next_logits,
+                          'token_type_ids': type_ids((num_samples, 1), index=tid),
+                          'position_ids': type_ids((num_samples, 1), index=pos_id),
+                          'past': past}
+            pos_id += 1
             generated = torch.cat((generated, next_logits), dim=1)
     return generated
 
 
-def sample_sequence_entity(model, length, e1, e2, num_samples=1, temperature=1, top_k=40, repetition_penalty=1.0):
+def sample_sequence_entity(model, length, e1, e2, num_samples=1, temperature=1, top_k=5, repetition_penalty=1.0):
     import global_constants
     device = global_constants.main_device
     if isinstance(e1, torch.Tensor):
@@ -114,12 +113,12 @@ def sample_sequence_entity(model, length, e1, e2, num_samples=1, temperature=1, 
     data = {'e1': e1, 'e2': e2}
     generated = _sample_sequence(model, length, data, generated, num_samples=num_samples, temperature=temperature,
                                  top_k=top_k, repetition_penalty=repetition_penalty,
-                                 data_func=process_re_data)
+                                 data_func=process_re_data, tid=0)
     return generated
 
 
 def sample_sequence(model, length, data, num_samples=1, temperature=1, top_k=40, repetition_penalty=1.0,
-                    data_func=lambda x: x, tid=2):
+                    data_func=lambda x: x, tid=0):
     import global_constants
     device = global_constants.main_device
     if isinstance(data, dict):
@@ -146,7 +145,7 @@ def sample_classifier_sequence(model, data):
     # print(data.shape)
 
     generated = get_model_output(model, data)
-    generated = generated.softmax(-1)
+    generated = generated[0].softmax(-1)
     result = []
     for i in range(generated.shape[0]):
         item = generated[i]

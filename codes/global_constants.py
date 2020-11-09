@@ -125,7 +125,8 @@ class TrainModesEnums(Enum):
                                _ce.dataset_type, _ce.loaders, _ce.batch_len, _ce.max_len, _ce.num_samples,
                                _ce.from_checkpoint, _ce.continue_train, _ce.data,
                                _ce.save_type, _ce.config, _ce.method, _ce.cal)
-    gpt2_model_eval = ModeParam(gpt2_model_eval, _ce.mode, _ce.model, _ce.load_path, _ce.save_path, _ce.idx_path,
+    gpt2_model_eval = ModeParam(gpt2_model_eval,
+                                _ce.mode, _ce.model, _ce.load_path, _ce.save_path, _ce.idx_path,
                                 _ce.sent_path, _ce.ent_path, _ce.idx_index_path, _ce.sent_index_path, _ce.db_path,
                                 _ce.ent_index_path, _ce.ent_data, _ce.gpt2, _ce.ids, _ce.indexer_type,
                                 _ce.batch_len_size,

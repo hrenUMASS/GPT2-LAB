@@ -1,7 +1,6 @@
 import json
 
 import numpy as np
-import regex as re
 from torch.utils.data import Dataset
 
 import libs
@@ -100,11 +99,11 @@ class IdxEpDBDataset(IdxDBDataset):
 
 class IdxFullDBDataset(IdxEpDBDataset):
 
-    def __init__(self, tokenizer, cursor=None, start_id=0, batch_len=100, data=None, ids=None, select_between=True,
-                 **kwargs):
+    def __init__(self, tokenizer, cursor=None, start_id=0, batch_len=100, data=None, ids=None, **kwargs):
         super(IdxFullDBDataset, self).__init__(tokenizer=tokenizer, cursor=cursor, start_id=start_id,
                                                batch_len=batch_len, data=data, ids=ids, **kwargs)
-        self.select_between = select_between
+        # self.select_between = select_between
+        # self.select_between = False
         self.data = np.array(self.data)
         sids = {int(x) for x in self.data[:, 3]}
         # print(len(sids))
@@ -141,29 +140,29 @@ class IdxFullDBDataset(IdxEpDBDataset):
         e1, e2 = self.ent_data[idx[1]].strip(), self.ent_data[idx[2]].strip()
         sent = self.sent_data[idx[3]].strip()
         # print(e1, e2, sent)
-        try:
-            if self.select_between:
-                e1a, e2a = [], []
-                for e1m in re.finditer('\\b' + e1 + '\\b', sent):
-                    e1a.append(e1m.start())
-                for e2m in re.finditer('\\b' + e2 + '\\b', sent):
-                    e2a.append(e2m.start())
-                if len(e1a) == 0 or len(e2a) == 0:
-                    e1i, e2i = sent.index(e1), sent.index(e2)
-                    start = min(e1i, e2i)
-                    if start == e1i:
-                        end = e2i + len(e2)
-                    else:
-                        end = e1i + len(e1)
-                else:
-                    start = min(e1a + e2a)
-                    if start in e1a:
-                        end = min(e2a) + len(e2)
-                    else:
-                        end = min(e1a) + len(e1)
-                sent = sent[start:end]
-        except:
-            pass
+        # try:
+        #     if self.select_between:
+        #         e1a, e2a = [], []
+        #         for e1m in re.finditer('\\b' + e1 + '\\b', sent):
+        #             e1a.append(e1m.start())
+        #         for e2m in re.finditer('\\b' + e2 + '\\b', sent):
+        #             e2a.append(e2m.start())
+        #         if len(e1a) == 0 or len(e2a) == 0:
+        #             e1i, e2i = sent.index(e1), sent.index(e2)
+        #             start = min(e1i, e2i)
+        #             if start == e1i:
+        #                 end = e2i + len(e2)
+        #             else:
+        #                 end = e1i + len(e1)
+        #         else:
+        #             start = min(e1a + e2a)
+        #             if start in e1a:
+        #                 end = min(e2a) + len(e2)
+        #             else:
+        #                 end = min(e1a) + len(e1)
+        #         sent = sent[start:end]
+        # except:
+        #     pass
         # log_info(libs.sample_logger, '{}\t{}'.format(e1, e2))
         # log_info(libs.sample_logger, '{}'.format(sent))
         sent = encode(self.tokenizer, sent, add_eos=False, add_prefix_space=True)

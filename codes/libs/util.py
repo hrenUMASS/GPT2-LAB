@@ -220,7 +220,7 @@ def process_re_data(data):
             e1p, e2p = pos_id(e1l), pos_id(e2l)
             e1a, e2a = type_ids(e1l, index=1, dtype=torch.float), type_ids(e2l, index=1, dtype=torch.float)
             ids = torch.cat((e1, e2))
-            token = torch.cat((type_ids(e1l, index=0), type_ids(e2l, index=0)))
+            token = torch.cat((type_ids(e1l, index=1), type_ids(e2l, index=1)))
             pos = torch.cat((e1p, e2p))
             attn = torch.cat((e1a, e2a))
             lab = torch.cat((e1, e2))
@@ -230,7 +230,7 @@ def process_re_data(data):
             inp = pos_id(inl)
             ina = type_ids(inl, index=1, dtype=torch.float)
             ids = torch.cat((ids, in_ids))
-            token = torch.cat((token, type_ids(in_ids.shape[0], index=1)))
+            token = torch.cat((token, type_ids(in_ids.shape[0], index=0)))
             pos = torch.cat((pos, inp))
             attn = torch.cat((attn, ina))
             lab = torch.cat((lab, in_ids))
@@ -241,7 +241,7 @@ def process_re_data(data):
         labels.append(lab)
     result_ids = cat_tensors(result_ids, padding=eos_id)
     poses = cat_tensors(poses)
-    tokens = cat_tensors(tokens, padding=2)
+    tokens = cat_tensors(tokens, padding=0)
     attns = cat_tensors(attns)
     labels = cat_tensors(labels, padding=ignore_index)
     if result_ids.shape[1] == 0:
@@ -353,7 +353,7 @@ def get_model_output(model: nn.Module, data: dict) -> torch.Tensor:
             print(k, v, v.shape, v.dtype)
         print([x.device for x in data.values() if x is not None])
         print(traceback.print_exc())
-        # exit()
+        exit()
         return None
 
 

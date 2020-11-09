@@ -1,8 +1,11 @@
 import torch
+import transformers as tfm
 from torch import nn
 from torch.nn import CrossEntropyLoss
 from transformers import GPT2PreTrainedModel
 from transformers.modeling_gpt2 import Block
+
+tok = tfm.GPT2Tokenizer.from_pretrained('gpt2')
 
 
 class GPT2REModel(GPT2PreTrainedModel):
@@ -21,6 +24,8 @@ class GPT2REModel(GPT2PreTrainedModel):
 
         self.ent = nn.Linear(config.n_embd, config.n_embd)
         self.pos = nn.Linear(config.n_embd, config.n_embd)
+
+        self.init_weights()
 
     def get_input_embeddings(self):
         return self.wte
@@ -50,20 +55,21 @@ class GPT2REModel(GPT2PreTrainedModel):
         for i in range(input_ids.shape[0]):
             inp = input_ids[i]
             type_id = token_type_ids[i]
-            # e1, e2 = inp[type_id == 0], inp[type_id == 1]
-            e = inp[type_id == 0]
             pos = position_ids[i]
-            ep = pos[type_id == 0]
+            e = inp[type_id == 1]
+            ep = pos[type_id == 1]
             embd = self.ent(self.wte(e))
             pos_embd = self.pos(self.wpe(ep))
-            # ep1, ep2 = pos[type_id == 0], pos[type_id == 1]
+            # e1, e2 = inp[type_id == 1], inp[type_id == 2]
+            # ep1, ep2 = pos[type_id == 1], pos[type_id == 2]
             # e1e, e2e = self.wte(e1), self.wte(e2)
             # e1p, e2p = self.wpe(ep1), self.wpe(ep2)
             # embd = self.ent(torch.cat((e1e, e2e)))
             # pos_embd = self.pos(torch.cat((e1p, e2p)))
-            if 1 in type_id:
-                embd = torch.cat((embd, self.wte(inp[type_id == 1])))
-                pos_embd = torch.cat((pos_embd, self.wpe(pos[type_id == 1])))
+            if 0 in type_id:
+                embd = torch.cat((embd, self.wte(inp[type_id == 0])))
+                pos_embd = torch.cat((pos_embd, self.wpe(pos[type_id == 0])))
+            # print([tok.decode(e1.tolist()), tok.decode(e2.tolist()), tok.decode(inp[type_id == 0].tolist())])
             inputs_embeds[i] = embd
             position_embeds[i] = pos_embd
 

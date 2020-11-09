@@ -33,6 +33,11 @@ def start_func(config):
     mode = tme[get_config(config, ce.mode)]
     fields = mode.value.fields
     con = {k: get_config(config, k) for k in fields}
+    # con = dict(config)
+    #
+    # for k in ce.__members__:
+    #     con[k] = get_config(con, k)
+
     # print(con)
     model_warp = me[con[ce.model]]
     # print(model_warp)

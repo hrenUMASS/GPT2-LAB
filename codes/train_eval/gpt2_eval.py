@@ -35,14 +35,14 @@ def eval_prob_one_epoch(dataloader, gpt2, model, length, num_samples, data_proce
             step_time = time.time()
             # print(data)
             rev = False
+            e1o, e2o = data['e1'][i], data['e2'][i]
             for _ in range(2):
                 rev = not rev
-                e1l, e2l = data['e1'][i], data['e2'][i]
                 # print(e1l, e2l)
                 # print(tokenizer)
                 # print(encode(tokenizer, e1l), encode(tokenizer, e2l))
                 # e1, e2 = encode(tokenizer, e1l).to(main_device), encode(tokenizer, e2l).to(main_device)
-                e1, e2 = e2l.to(main_device), e1l.to(main_device)
+                e1, e2 = e2o.to(main_device), e1o.to(main_device)
                 # e1l, e2l = e2l, e1l
                 e1, e2 = e2, e1
                 e1l, e2l = tokenizer.decode(e1.tolist()), tokenizer.decode(e2.tolist())
@@ -60,6 +60,7 @@ def eval_prob_one_epoch(dataloader, gpt2, model, length, num_samples, data_proce
                     sent_temp = sent_temp.cpu()
                     sent.append(sent_temp)
                 print('gen_time: {}'.format(time.time() - gen_time))
+
                 # print(sent)
                 eval_time = time.time()
                 for s in sent:
@@ -69,6 +70,7 @@ def eval_prob_one_epoch(dataloader, gpt2, model, length, num_samples, data_proce
                             sents.append(s[l])
                         else:
                             sents_non.append(s[l])
+                print([e1l, e2l] + [tokenizer.decode(x) for x in sents_non])
                 e1 = e1.cpu()
                 e2 = e2.cpu()
                 sl = len(sents)
@@ -177,9 +179,6 @@ def gpt2_eval_one_epoch(dataloader: DataLoader, gpt2: nn.Module, model: nn.Modul
         # raw[i][2] = raw[i][0] + " is a " + raw[i][1]
         # print(raw)
         data = data_func(raw)
-        # print(data)
-        # print(data)
-        # print(data)
         probs = get_seq_prob(model, data, data_func=process_re_data)
         # print(probs)
         for i in range(len(probs)):
