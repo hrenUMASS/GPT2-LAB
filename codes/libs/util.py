@@ -2,13 +2,11 @@ import inspect
 import time
 import traceback
 from datetime import datetime
-from sqlite3 import Cursor
-from typing import Sequence, Union, Iterable
+from typing import Sequence
 
 import numpy as np
 import torch
-import transformers as tfm
-from torch import nn, Tensor
+from torch import nn
 
 from . import loggers
 from .loggers import log_info
@@ -18,15 +16,15 @@ def get_column(arr, index):
     return [item[index] for item in arr]
 
 
-def get_index(ori: Tensor, comp: Tensor):
+def get_index(ori, comp):
     # print('index', ori, comp)
-    if ori.shape[0] < comp.shape[0]:
+    if len(ori) < len(comp):
         return -1
     index = -1
-    for i in range(ori.shape[0] - comp.shape[0] + 1):
+    for i in range(len(ori) - len(comp) + 1):
         if ori[i] == comp[0]:
             index = i
-            for j in range(comp.shape[0]):
+            for j in range(len(comp)):
                 if ori[i + j] != comp[j]:
                     index = -1
                     break
@@ -35,7 +33,7 @@ def get_index(ori: Tensor, comp: Tensor):
     return index
 
 
-def safe_sql(cursor: Cursor, command: str, arguments: Sequence = None, fetch: str = 'all', size: int = 1):
+def safe_sql(cursor, command, arguments=None, fetch='all', size=1):
     prepare_logger = loggers.prepare_logger
     start_time = time.time()
     dtn = datetime.now()
@@ -72,21 +70,7 @@ def safe_sql(cursor: Cursor, command: str, arguments: Sequence = None, fetch: st
         continue
 
 
-def tensor_lindex(ori: Tensor, dst: Tensor):
-    ori = ori.tolist()
-    dst = dst.tolist()
-
-    for i in range(len(ori)):
-        if ori[i] == dst[0]:
-            for j in range(len(dst)):
-                if ori[i + j] != dst[j]:
-                    break
-                elif j == len(dst) - 1:
-                    return i
-    return -1
-
-
-def split_array(arr: Union[Sequence, Iterable], block: int = 1000):
+def split_array(arr, block=1000):
     arr = list(arr)
     seg = len(arr) // block
     if seg * block != len(arr):
@@ -97,14 +81,14 @@ def split_array(arr: Union[Sequence, Iterable], block: int = 1000):
     return res
 
 
-def in_tensor(ori: Tensor, dst: Tensor):
+def in_tensor(ori, dst):
     ori = ori.tolist()
     dst = dst.tolist()
     n = len(dst)
     return any(dst == ori[i:i + n] for i in range(len(ori) - n + 1))
 
 
-def encode(tokenizer: tfm.PreTrainedTokenizer, elem: str, add_eos: bool = False, **kwargs):
+def encode(tokenizer, elem, add_eos=False, **kwargs):
     if isinstance(elem, str):
         result = tokenizer.encode(text=elem, return_tensors='pt', **kwargs).long()
         # print(result)
@@ -117,7 +101,7 @@ def encode(tokenizer: tfm.PreTrainedTokenizer, elem: str, add_eos: bool = False,
         return torch.tensor(tokenizer.convert_tokens_to_ids(elem))
 
 
-def get_tensor_batch(batch: Union[dict, Tensor], batch_size: int = 32, max_len: int = 512):
+def get_tensor_batch(batch, batch_size=32, max_len=512):
     if isinstance(batch, dict):
         batch = batch['sent']
     from global_constants import eos_id, ignore_index
@@ -152,9 +136,19 @@ def get_tensor_batch(batch: Union[dict, Tensor], batch_size: int = 32, max_len: 
     return {'input_ids': torch.stack(batch), 'labels': labels, 'attention_mask': attn_mask}
 
 
-def cat_tensors(tensor_list, padding=0):
+def pad_tensor(tensor, req_len, padding=0):
+    req_len = req_len - tensor.shape[0]
+    req_shape = list(tensor.shape)
+    req_shape[0] = req_len
+    device = tensor.device
+    dtype = tensor.dtype
+    return torch.cat((tensor, torch.zeros(*req_shape, dtype=dtype, device=device) + padding))
+
+
+def cat_tensors(tensor_list, padding=0, max_len=-1):
     result = list(tensor_list)
-    max_len = max(result, key=lambda x: x.shape[0]).shape[0]
+    if max_len == -1:
+        max_len = max(result, key=lambda x: x.shape[0]).shape[0]
     device = result[0].device
     dtype = result[0].dtype
     for i in range(len(result)):
@@ -175,19 +169,25 @@ def get_module_from_parallel(module):
 
 
 def type_ids(length, index=0, dtype=torch.long, device=None):
-    if device is not None:
-        return torch.zeros(length, dtype=dtype, device=device) + index
-
-    return torch.zeros(length, dtype=dtype) + index
+    return torch.zeros(length, dtype=dtype, device=device) + index
 
 
 def pos_id(length, device=None):
-    if device is not None:
-        return torch.arange(0, length, dtype=torch.long, device=device)
-    return torch.arange(0, length, dtype=torch.long)
+    return torch.arange(0, length, dtype=torch.long, device=device)
 
 
-def process_re_data(data):
+def get_between(e1, e2, sent, inclusive=False):
+    e1i, e2i = get_index(sent, e1), get_index(sent, e2)
+    if e1i > e2i:
+        e1i, e2i = e2i, e1i
+        e1, e2 = e2, e1
+    if inclusive:
+        return e1i, e2i + len(e2)
+    else:
+        return e1i + len(e1), e2i
+
+
+def process_re_data(data, between=False, inclusive=True):
     from global_constants import eos_id, ignore_index
     e1_ids, e2_ids = data.get('e1', None), data.get('e2', None)
     input_ids = data.get('sent', None)
@@ -207,33 +207,44 @@ def process_re_data(data):
     attns = []
     poses = []
     labels = []
+    has_ents = e1_ids is not None and e2_ids is not None and len(e1_ids) == len(e2_ids) and len(e1_ids) > 0 and len(
+        e2_ids) > 0
+    has_sents = input_ids is not None and len(input_ids) > 0
     for i in range(length):
         ids = torch.zeros(0, dtype=torch.long, device=device)
         token = torch.zeros(0, dtype=torch.long, device=device)
         pos = torch.zeros(0, dtype=torch.long, device=device)
         attn = torch.zeros(0, dtype=torch.float, device=device)
         lab = torch.zeros(0, dtype=torch.long, device=device)
-        if e1_ids is not None and e2_ids is not None \
-                and len(e1_ids) == len(e2_ids) and len(e1_ids) > 0 and len(e2_ids) > 0:
+        if has_ents:
             e1, e2 = e1_ids[i], e2_ids[i]
             e1l, e2l = e1.shape[0], e2.shape[0]
             e1p, e2p = pos_id(e1l), pos_id(e2l)
             e1a, e2a = type_ids(e1l, index=1, dtype=torch.float), type_ids(e2l, index=1, dtype=torch.float)
             ids = torch.cat((e1, e2))
-            token = torch.cat((type_ids(e1l, index=1), type_ids(e2l, index=1)))
+            token = torch.cat((type_ids(e1l, index=1), type_ids(e2l, index=2)))
             pos = torch.cat((e1p, e2p))
             attn = torch.cat((e1a, e2a))
             lab = torch.cat((e1, e2))
-        if input_ids is not None and len(input_ids) > 0:
+        if has_sents:
             in_ids = input_ids[i]
-            inl = in_ids.shape[0]
-            inp = pos_id(inl)
-            ina = type_ids(inl, index=1, dtype=torch.float)
-            ids = torch.cat((ids, in_ids))
-            token = torch.cat((token, type_ids(in_ids.shape[0], index=0)))
-            pos = torch.cat((pos, inp))
-            attn = torch.cat((attn, ina))
-            lab = torch.cat((lab, in_ids))
+            if between and has_ents:
+                a, b = get_between(e1, e2, in_ids, inclusive=inclusive)
+                ids = in_ids[a:b]
+                inl = ids.shape[0]
+                token = type_ids(inl)
+                attn = type_ids(inl, index=1, dtype=torch.float)
+                pos = pos_id(inl)
+                lab = ids
+            else:
+                inl = in_ids.shape[0]
+                inp = pos_id(inl)
+                ina = type_ids(inl, index=1, dtype=torch.float)
+                ids = torch.cat((ids, in_ids))
+                token = torch.cat((token, type_ids(in_ids.shape[0], index=0)))
+                pos = torch.cat((pos, inp))
+                attn = torch.cat((attn, ina))
+                lab = torch.cat((lab, in_ids))
         result_ids.append(ids)
         tokens.append(token)
         attns.append(attn)
@@ -241,43 +252,11 @@ def process_re_data(data):
         labels.append(lab)
     result_ids = cat_tensors(result_ids, padding=eos_id)
     poses = cat_tensors(poses)
-    tokens = cat_tensors(tokens, padding=0)
+    tokens = cat_tensors(tokens, padding=2)
     attns = cat_tensors(attns)
     labels = cat_tensors(labels, padding=ignore_index)
     if result_ids.shape[1] == 0:
         return None
-    return {'input_ids': result_ids, 'attention_mask': attns, 'token_type_ids': tokens, 'position_ids': poses,
-            'labels': labels}
-
-
-def process_cls_data(data):
-    from global_constants import eos_id, ignore_index
-    result_ids = [x[0] for x in data]
-
-    device = result_ids[0].device
-
-    for x in result_ids:
-        x.to(device)
-
-    attns = []
-    tokens = []
-    poses = []
-    labels = []
-
-    for i in range(len(data)):
-        s = result_ids[i]
-        l = len(s)
-        attns.append(type_ids(l, index=1, dtype=torch.float, device=device))
-        tokens.append(type_ids(l, index=0, device=device))
-        poses.append(pos_id(l, device=device))
-        labels.append(torch.zeros(1, dtype=torch.long, device=device))
-        labels[-1][0] = data[i][1]
-
-    result_ids = cat_tensors(result_ids, padding=eos_id)
-    poses = cat_tensors(poses)
-    tokens = cat_tensors(tokens)
-    attns = cat_tensors(attns)
-    labels = cat_tensors(labels, padding=ignore_index)
     return {'input_ids': result_ids, 'attention_mask': attns, 'token_type_ids': tokens, 'position_ids': poses,
             'labels': labels}
 
@@ -325,36 +304,59 @@ def get_re_data(data, max_len=np.inf, batch_size=32):
     return result
 
 
-def get_model_output(model: nn.Module, data: dict) -> torch.Tensor:
-    import global_constants
+def process_cls_data(data):
+    from global_constants import eos_id, ignore_index
+    result_ids = [x[0] for x in data]
+
+    device = result_ids[0].device
+
+    for x in result_ids:
+        x.to(device)
+
+    attns = []
+    tokens = []
+    poses = []
+    labels = []
+    # print(data)
+    for i in range(len(data)):
+        s = result_ids[i]
+        l = len(s)
+        attns.append(type_ids(l, index=1, dtype=torch.float, device=device))
+        tokens.append(type_ids(l, index=0, device=device))
+        poses.append(pos_id(l, device=device))
+        labels.append(torch.zeros(1, dtype=torch.long, device=device))
+        labels[-1][0] = data[i][1]
+
+    result_ids = cat_tensors(result_ids, padding=eos_id)
+    poses = cat_tensors(poses)
+    tokens = cat_tensors(tokens)
+    attns = cat_tensors(attns)
+    labels = cat_tensors(labels, padding=ignore_index)
+    return {'input_ids': result_ids, 'attention_mask': attns, 'token_type_ids': tokens, 'position_ids': poses,
+            'labels': labels}
+
+
+def get_model_output(model, data):
+    from global_constants import main_device
     # device = torch.device('cuda:0')
     # for k, v in data.items():
     #     print(k, v)
-
-    # for i in data:
-    #     data[i] = data[i].cuda()
-
     for i in data:
         if data[i] is not None and isinstance(data[i], torch.Tensor):
             req_grad = data[i].requires_grad
-            data[i] = data[i].clone().detach().requires_grad_(req_grad).to(global_constants.main_device)
-    # for k, v in data.items():
-    #     print(k, v.shape, v.device)
+            data[i] = data[i].clone().detach().requires_grad_(req_grad).to(main_device)
     # print([x.device for x in data.values()])
     # print(data)
     try:
         output = model(**data)
         return output
     except Exception as e:
-        print(e)
-        # print('data: ', data)
-        print('error begin')
+        print('data: ', data)
         for k, v in data.items():
-            print(k, v, v.shape, v.dtype)
+            print(k, v.shape)
         print([x.device for x in data.values() if x is not None])
         print(traceback.print_exc())
         exit()
-        return None
 
 
 def save_checkpoint(save_path, check_point):
@@ -407,28 +409,3 @@ def get_config(config, item):
 def del_key(d, k):
     if k in d:
         del d[k]
-
-
-def str_index_warp(self, sub):
-    try:
-        return self.index(sub)
-    except:
-        return -1
-
-
-def chop_between(ori, e1, e2, index_func=str_index_warp, include=True):
-    e1i, e2i = index_func(ori, e1), index_func(ori, e2)
-    if e1i != -1 and e2i != -1:
-        if e1i > e2i:
-            start = e2i + len(e2)
-            end = e1i
-            l1, l2 = len(e2), len(e1)
-        else:
-            start = e1i + len(e1)
-            end = e2i
-            l1, l2 = len(e1), len(e2)
-        if include:
-            start -= l1
-            end += l2
-        return ori[start:end]
-    return None

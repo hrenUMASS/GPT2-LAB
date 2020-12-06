@@ -4,7 +4,6 @@ from datetime import datetime
 import numpy as np
 import torch
 import transformers as tfm
-from torch import autograd
 from torch import nn
 from torch.utils.data import DataLoader
 
@@ -18,41 +17,32 @@ def train_one_epoch(dataloader, model, optimizer, scheduler, data_process_func, 
     cuda_logger, train_logger = loggers.cuda_logger, loggers.train_logger
     loss = None
     for step, raw in enumerate(dataloader):
-        # print('st', step, raw)
         step_time = time.time()
         # print(raw)
         # print(inspect.getsource(data_process_func))
         # print(raw)
         data = data_process_func(raw)
-        # print(data)
         # for r in raw:
         #     print(tok.decode(r[0].tolist()), tok.decode(r[1].tolist()))
-        # print(data)
-
-        # def de(t):
-        #     return tok.decode(t.tolist())
-
-        # for i in range(len(data['input_ids'])):
-        #     print(de(raw[i][0]), de(raw[i][1]), de(data['input_ids'][i]))
         if data is None:
             log_info(cuda_logger, 'Empty data {} Iter'.format(step))
             continue
         # print(data)
         log_info(cuda_logger,
                  'Allocated batches {}, {}'.format(cuda_mem_in_mb(), {k: v.shape for k, v in data.items()}))
-        loss = get_model_output(model, data)
-        with autograd.detect_anomaly():
-            # if len(losses) > 0 and abs(loss_value - losses[-1]) > 0.5:
-            #     log_info(loggers[2], 'Huge Loss Change Detected {}\n{}'.format(loss_value - losses[-1], raw))
-            loss = loss[0].mean()
-            loss.backward()
-            nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            optimizer.step()
-            scheduler.step()
-            model.zero_grad()
-            loss_value = loss.cpu().item()
-            losses.append(loss_value)
-            log_info(train_logger, '{} Iter Loss {} Time {}'.format(step, loss_value, time.time() - step_time))
+        loss = get_model_output(model, data)[0].mean()
+        print(loss)
+        loss_value = loss.item()
+        # if len(losses) > 0 and abs(loss_value - losses[-1]) > 0.5:
+        #     log_info(loggers[2], 'Huge Loss Change Detected {}\n{}'.format(loss_value - losses[-1], raw))
+        loss.backward()
+        nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        optimizer.step()
+        scheduler.step()
+        model.zero_grad()
+        losses.append(loss_value)
+        log_info(train_logger, '{} Iter Loss {} Time {}'.format(step, loss_value, time.time() - step_time))
+
     return losses, loss
 
 

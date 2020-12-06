@@ -12,7 +12,6 @@ class DBIndexer(AbstractIndexer):
             with open(ids, 'r') as f:
                 ids = json.load(f)
         self.ids = ids
-        print(db_path)
         self.cursor = sqlite3.connect(db_path).cursor()
         self.start_id = 0
         self.batch_size = batch_size

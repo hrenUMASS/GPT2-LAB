@@ -1,11 +1,10 @@
 import torch
-import transformers as tfm
 from torch import nn
 from torch.nn import CrossEntropyLoss
 from transformers import GPT2PreTrainedModel
 from transformers.modeling_gpt2 import Block
 
-tok = tfm.GPT2Tokenizer.from_pretrained('gpt2')
+from libs import get_between, pad_tensor
 
 
 class GPT2REModel(GPT2PreTrainedModel):
@@ -25,6 +24,8 @@ class GPT2REModel(GPT2PreTrainedModel):
         self.ent = nn.Linear(config.n_embd, config.n_embd)
         self.pos = nn.Linear(config.n_embd, config.n_embd)
 
+        self.between = hasattr(config, 'between') and config.between
+
         self.init_weights()
 
     def get_input_embeddings(self):
@@ -40,45 +41,42 @@ class GPT2REModel(GPT2PreTrainedModel):
         for layer, heads in heads_to_prune.items():
             self.h[layer].attn.prune_heads(heads)
 
-    def forward(self, input_ids, attention_mask=None, position_ids=None, token_type_ids=None, past=None):
+    def forward(self, input_ids, attention_mask, position_ids, token_type_ids, past=None):
         device = input_ids.device
 
         inputs_embeds = torch.zeros(*input_ids.shape, self.wte.embedding_dim, dtype=self.wte.weight.dtype,
                                     device=device)
         position_embeds = torch.zeros(*inputs_embeds.shape, dtype=self.wpe.weight.dtype, device=device)
 
-        token_type_embeds = 0
-        if token_type_ids is not None:
-            token_type_embeds = self.wte(token_type_ids)
-
-        # if token_type_ids is not None and position_ids is not None:
         for i in range(input_ids.shape[0]):
             inp = input_ids[i]
-            type_id = token_type_ids[i]
             pos = position_ids[i]
-            e = inp[type_id == 1]
-            ep = pos[type_id == 1]
-            embd = self.ent(self.wte(e))
-            pos_embd = self.pos(self.wpe(ep))
-            # e1, e2 = inp[type_id == 1], inp[type_id == 2]
-            # ep1, ep2 = pos[type_id == 1], pos[type_id == 2]
-            # e1e, e2e = self.wte(e1), self.wte(e2)
-            # e1p, e2p = self.wpe(ep1), self.wpe(ep2)
-            # embd = self.ent(torch.cat((e1e, e2e)))
-            # pos_embd = self.pos(torch.cat((e1p, e2p)))
+            type_id = token_type_ids[i]
+            e1, e2 = inp[type_id == 1], inp[type_id == 2]
+            ep1, ep2 = pos[type_id == 1], pos[type_id == 2]
+            e1e, e2e = self.wte(e1), self.wte(e2)
+            e1p, e2p = self.wpe(ep1), self.wpe(ep2)
+            embd = self.ent(torch.cat((e1e, e2e)))
+            pos_embd = self.pos(torch.cat((e1p, e2p)))
             if 0 in type_id:
-                embd = torch.cat((embd, self.wte(inp[type_id == 0])))
-                pos_embd = torch.cat((pos_embd, self.wpe(pos[type_id == 0])))
-            # print([tok.decode(e1.tolist()), tok.decode(e2.tolist()), tok.decode(inp[type_id == 0].tolist())])
+                s = inp[type_id == 0]
+                sp = pos[type_id == 0]
+                sl = s.shape[0]
+                if self.between:
+                    # print({'e1': e1, 'e2': e2, 's': s})
+                    a, b = get_between(e1, e2, s, inclusive=True)
+                    se = self.wte(s)[a:b]
+                    attention_mask[i][len(e1) + len(e2) + (b - a):] = 0
+                    se = pad_tensor(se, sl, 0)
+                else:
+                    se = self.wte(s)
+                embd = torch.cat((embd, se))
+                pos_embd = torch.cat((pos_embd, self.wpe(sp)))
             inputs_embeds[i] = embd
             position_embeds[i] = pos_embd
 
-        if position_ids is None:
-            position_ids = torch.arange(0, input_ids.shape[1], dtype=torch.long)
-            position_ids = torch.stack([position_ids] * input_ids.shape[0], 0)
-            position_ids = position_ids.to(device)
-            # print(position_ids.device, input_ids.device)
-            position_embeds = self.wpe(position_ids)
+        token_type_ids[token_type_ids == 2] = 1
+        token_type_embeds = self.wte(token_type_ids)
 
         # print(inputs_embeds.shape, position_embeds.shape, token_type_embeds.shape, attention_mask.shape)
         if attention_mask is not None:
@@ -89,9 +87,6 @@ class GPT2REModel(GPT2PreTrainedModel):
             attention_mask = (attention_mask - 1.0) * 10000.0
 
         # print(e1_mask.shape, e2_mask.shape, attention_mask.shape)
-        # token_type_ids[token_type_ids == 1] = 0
-        # token_type_ids[token_type_ids == 2] = 1
-        # token_type_embeds = self.wte(token_type_ids)
         hidden_states = inputs_embeds + position_embeds + token_type_embeds
         hidden_states = self.drop(hidden_states)
 
@@ -153,7 +148,6 @@ class GPT2LMREModel(GPT2PreTrainedModel):
 
     def forward(self, input_ids, attention_mask=None, position_ids=None, token_type_ids=None, labels=None, past=None):
         from global_constants import ignore_index
-
         transformer_outputs = self.transformer(input_ids=input_ids, attention_mask=attention_mask,
                                                position_ids=position_ids, token_type_ids=token_type_ids, past=past)
         hidden_states = transformer_outputs[0]

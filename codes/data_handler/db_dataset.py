@@ -30,6 +30,7 @@ class IdxDBDataset(Dataset):
         else:
             self.data = safe_sql(self.cursor, 'SELECT * FROM idx WHERE id > ? AND id <= ?',
                                  (start_id, start_id + batch_len))
+        self.data = np.array(self.data)
         libs.log_info(libs.prepare_logger, 'loaded data length {}'.format(len(self.data)))
 
     def get_loaded_length(self):
@@ -67,7 +68,6 @@ class IdxEpDBDataset(IdxDBDataset):
         super(IdxEpDBDataset, self).__init__(cursor=cursor, start_id=start_id, batch_len=batch_len, data=data,
                                              ids=ids, **kwargs)
         self.tokenizer = tokenizer
-        self.data = np.array(self.data)
         eids = {int(x) for x in self.data[:, [1, 2]].reshape(-1, 1).squeeze(1)}
         if data is not None and 'ent' in data:
             self.ent_data = data['ent']
@@ -88,7 +88,7 @@ class IdxEpDBDataset(IdxDBDataset):
                 #                         .format(','.join('?' * len(seg))), seg)
                 # )
             self.cursor.execute('COMMIT')
-            self.ent_data = {e[0]: ' ' + e[1].strip() for e in self.ent_data}
+            self.ent_data = {e[0]: e[1] for e in self.ent_data}
 
     def __getitem__(self, item):
         idx = self.data[item]
@@ -102,9 +102,6 @@ class IdxFullDBDataset(IdxEpDBDataset):
     def __init__(self, tokenizer, cursor=None, start_id=0, batch_len=100, data=None, ids=None, **kwargs):
         super(IdxFullDBDataset, self).__init__(tokenizer=tokenizer, cursor=cursor, start_id=start_id,
                                                batch_len=batch_len, data=data, ids=ids, **kwargs)
-        # self.select_between = select_between
-        # self.select_between = False
-        self.data = np.array(self.data)
         sids = {int(x) for x in self.data[:, 3]}
         # print(len(sids))
         if data is not None and 'sent' in data:
@@ -123,9 +120,8 @@ class IdxFullDBDataset(IdxEpDBDataset):
                 #                         .format(','.join('?' * len(seg))), seg)
                 # )
             self.cursor.execute('COMMIT')
-            self.sent_data = {s[0]: s[1] for s in self.sent_data}
-            # self.sent_data = {s[0]: encode(tokenizer, s[1], add_eos=True, add_prefix_space=True) for s in
-            #                   self.sent_data}
+            self.sent_data = {s[0]: encode(tokenizer, s[1], add_eos=True, add_prefix_space=True) for s in
+                              self.sent_data}
             # print(len(self.sent_data))
 
             # print(list(self.sent_data.keys()))
@@ -137,40 +133,11 @@ class IdxFullDBDataset(IdxEpDBDataset):
     def __getitem__(self, item):
         # e1, e2, idx = IdxEpDBDataset.__getitem__(self, item)
         idx = self.data[item]
-        e1, e2 = self.ent_data[idx[1]].strip(), self.ent_data[idx[2]].strip()
-        sent = self.sent_data[idx[3]].strip()
-        # print(e1, e2, sent)
-        # try:
-        #     if self.select_between:
-        #         e1a, e2a = [], []
-        #         for e1m in re.finditer('\\b' + e1 + '\\b', sent):
-        #             e1a.append(e1m.start())
-        #         for e2m in re.finditer('\\b' + e2 + '\\b', sent):
-        #             e2a.append(e2m.start())
-        #         if len(e1a) == 0 or len(e2a) == 0:
-        #             e1i, e2i = sent.index(e1), sent.index(e2)
-        #             start = min(e1i, e2i)
-        #             if start == e1i:
-        #                 end = e2i + len(e2)
-        #             else:
-        #                 end = e1i + len(e1)
-        #         else:
-        #             start = min(e1a + e2a)
-        #             if start in e1a:
-        #                 end = min(e2a) + len(e2)
-        #             else:
-        #                 end = min(e1a) + len(e1)
-        #         sent = sent[start:end]
-        # except:
-        #     pass
-        # log_info(libs.sample_logger, '{}\t{}'.format(e1, e2))
-        # log_info(libs.sample_logger, '{}'.format(sent))
-        sent = encode(self.tokenizer, sent, add_eos=False, add_prefix_space=True)
-        e1, sent = self.unify_entity(e1, sent, idx[3])
-        e2, sent = self.unify_entity(e2, sent, idx[3])
-        # print(type(e1), type(e2), type(sent))
-        # print(e1, e2, sent, '\n')
-        # sent = self.sent_data[idx[3]]
+        e1, e2 = self.ent_data[idx[1]], self.ent_data[idx[2]]
+        sent = self.sent_data[idx[3]]
+        # print(e1, e2)
+        e1, e2 = self.unify_entity(e1, sent, idx[3]), self.unify_entity(e2, sent, idx[3])
+        sent = self.sent_data[idx[3]]
         return e1, e2, sent, idx
 
     def unify_entity(self, ent, sent, sent_idx):
@@ -192,7 +159,6 @@ class IdxFullDBDataset(IdxEpDBDataset):
                         sent_tok.insert(k + 1, temp[1:])
                         changed = True
                     return sent_tok[idx: k + 1], changed
-            return None, False
 
         space = 'Ġ'
         sent_tok = self.tokenizer.convert_ids_to_tokens(sent.tolist())
@@ -204,10 +170,10 @@ class IdxFullDBDataset(IdxEpDBDataset):
             if ent_temp.startswith(tmp):
                 ent_tok, changed = in_tensor(ent_temp, sent_tok, i)
                 if ent_tok is not None:
-                    # if changed:
-                    #     self.sent_data[sent_idx] = encode(self.tokenizer, sent_tok)
-                    return encode(self.tokenizer, ent_tok), encode(self.tokenizer, sent_tok)
-        return encode(self.tokenizer, ent), encode(self.tokenizer, sent_tok)
+                    if changed:
+                        self.sent_data[sent_idx] = encode(self.tokenizer, sent_tok)
+                    return encode(self.tokenizer, ent_tok)
+        return encode(self.tokenizer, ent)
 
 
 class IdxClsDataset(IdxDBDataset):
@@ -220,4 +186,5 @@ class IdxClsDataset(IdxDBDataset):
 
     def __getitem__(self, item):
         # sent label idx
-        return encode(self.tokenizer, self.data[item][2]), self.data[item][1], self.data[item][0]
+        # print(self.data[item])
+        return encode(self.tokenizer, self.data[item][2]), int(self.data[item][1]), int(self.data[item][0])
