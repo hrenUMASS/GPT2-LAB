@@ -19,6 +19,7 @@ _tok = tfm.GPT2Tokenizer.from_pretrained('gpt2')
 def eval_prob_one_epoch(dataloader, gpt2, model, length, num_samples, data_process_func, tokenizer=None):
     from global_constants import main_device
     result = pd.DataFrame(columns=['e1', 'e2', 'sent', 'log_prod_prob', 'sample_sent'])
+    result_non = pd.DataFrame(columns=['e1', 'e2', 'sent', 'sample_sent'])
     sample_logger = loggers.sample_logger
     max_sample = 32
     divs = num_samples // max_sample
@@ -41,6 +42,7 @@ def eval_prob_one_epoch(dataloader, gpt2, model, length, num_samples, data_proce
             # e1l, e2l = e2l, e1l
             e1l, e2l = tokenizer.decode(e1.tolist()), tokenizer.decode(e2.tolist())
             sents = []
+            sents_non = []
             sent = []
             gen_time = time.time()
             print('sampling {}, {}'.format(e1l, e2l))
@@ -59,12 +61,23 @@ def eval_prob_one_epoch(dataloader, gpt2, model, length, num_samples, data_proce
                     sl = tokenizer.decode(s[l].tolist())
                     if e1l in sl and e2l in sl:
                         sents.append(s[l])
+                    else:
+                        sents_non.append(s[l])
+
             e1 = e1.cpu()
             e2 = e2.cpu()
             sl = len(sents)
+            sl_non = len(sents_non)
             idx = data['idx'][i]
-            res_data = {'e1': [idx[0]] * sl, 'e2': [idx[1]] * sl, 'sent': sents,
-                        'log_prod_prob': [], 'sample_sent': [idx[2]] * sl}
+
+            def construct_res(leng, sentences):
+                return {'e1': [idx[0]] * leng, 'e2': [idx[1]] * leng, 'sent': sentences,
+                        'log_prod_prob': [], 'sample_sent': [idx[2]] * leng}
+
+            res_data = construct_res(sl, sents)
+            res_non_data = construct_res(sl_non, sents_non)
+            del res_non_data['log_prod_prob']
+
             if sl > 0:
                 divs = sl // max_sample
                 paps = [max_sample] * divs
@@ -78,12 +91,13 @@ def eval_prob_one_epoch(dataloader, gpt2, model, length, num_samples, data_proce
                     # res_data['loss'].extend(get_column(probs, 2))
 
             result = pd.concat([result, pd.DataFrame(res_data)])
+            result_non = pd.concat([result_non, pd.DataFrame(res_non_data)])
             print('eval_time: {}'.format(time.time() - eval_time))
             log_info(sample_logger, 'Sampled {} sents for e1 {}, e2 {}'.format(len(sents),
                                                                                tokenizer.decode(e1.tolist()),
                                                                                tokenizer.decode(e2.tolist())))
             print('tot time: {}, avg: {}'.format(time.time() - step_time, (time.time() - step_time) / num_samples))
-    return result
+    return {'result': result, 'result_non': result_non}
 
 
 def eval_sequences(gpt2, model, dataset, num_samples, max_len, data_func=lambda x: x, tokenizer=None):
