@@ -1,7 +1,6 @@
 from torch import nn
 from torch.nn import CrossEntropyLoss
-from transformers import GPT2Model
-from transformers import GPT2PreTrainedModel
+from transformers.models.gpt2.modeling_gpt2 import GPT2Model, GPT2PreTrainedModel
 
 
 class GPT2REClsModel(GPT2PreTrainedModel):

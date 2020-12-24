@@ -28,12 +28,13 @@ def _get_next_logits(model, inputs, generated, num_samples=1, temperature=1, top
         for _ in set(generated[i].tolist()):
             next_token_logits[i, _] /= repetition_penalty
     filtered_logits = top_k_top_p_filtering(next_token_logits, top_k=top_k)
-    if temperature == 0:  # greedy sampling:
-        return filtered_logits
+    # if temperature == 0:  # greedy sampling:
+    #     return filtered_logits
     return F.softmax(filtered_logits, dim=-1), past
 
 
-def get_seq_prob(model, data, data_func=lambda x: get_tensor_batch(x, batch_size=1, max_len=np.inf)):
+def get_seq_prob(model, data, data_func=lambda x: get_tensor_batch(x, batch_size=1, max_len=np.inf),
+                 mode="e1,e2,loss,sent,max"):
     with torch.no_grad():
         model.eval()
         # print(data, data_func)
@@ -42,30 +43,42 @@ def get_seq_prob(model, data, data_func=lambda x: get_tensor_batch(x, batch_size
         probs = []
         del_key(inputs, 'labels')
 
+        mode = mode.split(',')
+
+        e1m = "e1" in mode
+        e2m = "e2" in mode
+        lsm = "loss" in mode
+        sem = "sent" in mode
+        mam = "max" in mode
+
         layers = get_model_output(model, inputs)
-        output = F.softmax(layers[0][0], dim=1)
-        for e1, e2, sent, idx in zip(data['e1'], data['e2'], data['sent'], data['idx']):
+        output = layers[0]
+        # output = F.softmax(layers[0], dim=1)
+        keys = ['e1', 'e2', 'sent', 'idx']
+        for i, (e1, e2, sent, idx) in enumerate(zip(*(data[k] for k in keys))):
             if sent.shape[0] == 0:
                 continue
-            e1l, e2l = e1.shape[0], e2.shape[0]
-            pre_len = e1l + e2l
-            # index_e1 = get_index(sent, e1) + pre_len
-            index_e2 = get_index(sent, e2) + pre_len
 
-            # sub_output_e1 = output[index_e1:index_e1 + e1l]
-            sub_output_e2 = output[index_e2:index_e2 + e2l]
-            prob_e1, prob_e2 = np.zeros(e1l), np.zeros(e2l)
-            # print(1)
-            # print(sub_output_e2.max(), sub_output_e2.min())
-            # for e1i in range(e1l):
-            #     prob_e1[e1i] = sub_output_e1[e1i][e1[e1i]].item()
-            for e2i in range(e2l):
-                # try:
-                prob_e2[e2i] = sub_output_e2[e2i][e2[e2i]].item()
-                # except:
-                #     pass
-            # loss = layers[0].mean().item()
-            probs.append((prob_e1, prob_e2))
+            result = {}
+            if e1m or e2m:
+                e1l, e2l = e1.shape[0], e2.shape[0]
+                pre_len = e1l + e2l
+            if e1m:
+                index_e1 = get_index(sent, e1) + pre_len
+                prob_e1 = output[i][index_e1:index_e1 + e1l].numpy()
+                result['prob_e1'] = prob_e1
+            if e2m:
+                index_e2 = get_index(sent, e2) + pre_len
+                prob_e2 = output[i][index_e2:index_e2 + e2l].numpy()
+                result['prob_e2'] = prob_e2
+            if lsm:
+                loss = layers[0].mean().item()
+                result['loss'] = loss
+            if sem:
+                result['sent'] = output[i].cpu().numpy()
+            if mam:
+                result['max'] = output[i].argmax(2).numpy()
+            probs.append(result)
     return probs
 
 
@@ -87,8 +100,8 @@ def _sample_sequence(model, length, data, generated, num_samples=1, temperature=
             else:
                 next_token = torch.multinomial(next_logits, num_samples=1)
             next_input = {'input_ids': next_token,
-                          'token_type_ids': torch.zeros((num_samples, 1), dtype=np.long) + 2,
-                          'position_ids': torch.zeros((num_samples, 1), dtype=np.long) + pos_id,
+                          'token_type_ids': torch.zeros(num_samples, 1, dtype=torch.long) + 2,
+                          'position_ids': torch.zeros(num_samples, 1, dtype=torch.long) + pos_id,
                           'past': past}
             pos_id += 1
             generated = torch.cat((generated, next_token), dim=1)
@@ -107,8 +120,7 @@ def sample_sequence_entity(model, length, e1, e2, num_samples=1, temperature=1, 
     e1, e2 = e1.unsqueeze(0).repeat(num_samples, 1), e2.unsqueeze(0).repeat(num_samples, 1)
     data = {'e1': e1, 'e2': e2}
     generated = _sample_sequence(model, length, data, generated, num_samples=num_samples, temperature=temperature,
-                                 top_k=top_k, repetition_penalty=repetition_penalty,
-                                 data_func=process_re_data)
+                                 top_k=top_k, repetition_penalty=repetition_penalty, data_func=process_re_data)
     return generated
 
 

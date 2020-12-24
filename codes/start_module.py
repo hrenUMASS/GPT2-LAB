@@ -156,18 +156,18 @@ def single_train(config, index):
     config[ce.model] = config[ce.model].to(main_device)
 
     final_logger = loggers.final_logger
-    model_state = config[ce.model].state_dict()
+    # model_state = config[ce.model].state_dict()
     # print(list(model_state.keys()))
     train_params = get_params(config, train)
     new_model, train_losses = train(**train_params)
     new_model = get_module_from_parallel(new_model)
-    config[ce.dataset] = config[ce.evalset]
-    eval_params = get_params(config, evaluate)
-    perplexity, perplexities, eval_losses = evaluate(**eval_params)
-    refuse = False
-    loss = torch.mean(eval_losses)
-    # print('index i', index)
-    log_info(final_logger, 'final mean loss {}'.format(loss))
+    if config[ce.evalset] is not None:
+        config[ce.dataset] = config[ce.evalset]
+        eval_params = get_params(config, evaluate)
+        perplexity, perplexities, eval_losses = evaluate(**eval_params)
+        loss = torch.mean(eval_losses)
+        # print('index i', index)
+        log_info(final_logger, 'final mean eval loss {}'.format(loss))
     # if loss > config[ce.prev_eval_loss]:
     #     new_model.load_state_dict(model_state)
     #     refuse = True
@@ -199,12 +199,16 @@ def single_train(config, index):
         log_info(final_logger, 'saving training losses')
         save_torch(train_losses, log_path + 'train_losses.pt')
         log_info(final_logger, 'saving evaluation losses')
-        save_torch(eval_losses, log_path + 'eval_losses.pt')
-        save_torch(perplexity, log_path + 'perplexity.pt')
-        save_torch(perplexities, log_path + 'perplexities.pt')
-        log_info(final_logger, 'mean eval losses {}'.format(torch.mean(eval_losses)))
+        if config[ce.evalset] is not None:
+            save_torch(eval_losses, log_path + 'eval_losses.pt')
+            save_torch(perplexity, log_path + 'perplexity.pt')
+            save_torch(perplexities, log_path + 'perplexities.pt')
+            log_info(final_logger, 'mean eval losses {}'.format(torch.mean(eval_losses)))
         log_info(final_logger, 'All saved')
-    return new_model, loss
+    if config[ce.evalset] is not None:
+        return new_model, loss
+    else:
+        return new_model, torch.mean(train_losses)
 
 
 def single_sequence_generation(config, index):

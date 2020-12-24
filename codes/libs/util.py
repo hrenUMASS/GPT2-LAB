@@ -7,6 +7,7 @@ from typing import Sequence
 import numpy as np
 import torch
 from torch import nn
+from transformers import PreTrainedModel
 
 from . import loggers
 from .loggers import log_info
@@ -172,8 +173,8 @@ def type_ids(length, index=0, dtype=torch.long, device=None):
     return torch.zeros(length, dtype=dtype, device=device) + index
 
 
-def pos_id(length, device=None):
-    return torch.arange(0, length, dtype=torch.long, device=device)
+def pos_id(length, start=0, device=None):
+    return torch.arange(start, start + length, dtype=torch.long, device=device)
 
 
 def get_between(e1, e2, sent, inclusive=False):
@@ -252,7 +253,7 @@ def process_re_data(data, between=False, inclusive=True):
         labels.append(lab)
     result_ids = cat_tensors(result_ids, padding=eos_id)
     poses = cat_tensors(poses)
-    tokens = cat_tensors(tokens, padding=2)
+    tokens = cat_tensors(tokens, padding=0)
     attns = cat_tensors(attns)
     labels = cat_tensors(labels, padding=ignore_index)
     if result_ids.shape[1] == 0:
@@ -336,7 +337,7 @@ def process_cls_data(data):
             'labels': labels}
 
 
-def get_model_output(model, data):
+def get_model_output(model: PreTrainedModel, data):
     from global_constants import main_device
     # device = torch.device('cuda:0')
     # for k, v in data.items():

@@ -7,8 +7,7 @@ import transformers as tfm
 from torch import nn
 from torch.utils.data import DataLoader
 
-from libs import get_column
-from libs import get_model_output, process_re_data, encode
+from libs import get_model_output, process_re_data
 from libs import log_info, cuda_mem_in_mb
 from libs import loggers
 from .sequence_sampling import sample_sequence_entity, get_seq_prob, sample_classifier_sequence
@@ -48,7 +47,7 @@ def eval_prob_one_epoch(dataloader, gpt2, model, length, num_samples, data_proce
             print('sampling {}, {}'.format(e1l, e2l))
             for ns in saps:
                 # print(length, ns)
-                sent_temp = sample_sequence_entity(model, length, e1, e2, num_samples=ns, top_k=5)
+                sent_temp = sample_sequence_entity(model, length, e1, e2, num_samples=ns, top_k=5, temperature=0)
                 if sent_temp is None:
                     continue
                 sent_temp = sent_temp.cpu()
@@ -71,8 +70,8 @@ def eval_prob_one_epoch(dataloader, gpt2, model, length, num_samples, data_proce
             idx = data['idx'][i]
 
             def construct_res(leng, sentences):
-                return {'e1': [idx[0]] * leng, 'e2': [idx[1]] * leng, 'sent': sentences,
-                        'log_prod_prob': [], 'sample_sent': [idx[2]] * leng}
+                return {'e1': [idx[1]] * leng, 'e2': [idx[2]] * leng, 'sent': sentences,
+                        'log_prod_prob': [], 'sample_sent': [idx[3]] * leng}
 
             res_data = construct_res(sl, sents)
             res_non_data = construct_res(sl_non, sents_non)
@@ -87,8 +86,9 @@ def eval_prob_one_epoch(dataloader, gpt2, model, length, num_samples, data_proce
                     temp_data = {'e1': [e1] * pap, 'e2': [e2] * pap,
                                  'sent': sents[j * max_sample: j * max_sample + pap], 'idx': [idx] * pap}
                     probs = get_seq_prob(gpt2, temp_data, data_func=process_re_data)
-                    res_data['log_prod_prob'].extend(get_column(probs, 1))
+                    # res_data['log_prod_prob'].extend(get_column(probs, 1))
                     # res_data['loss'].extend(get_column(probs, 2))
+                    res_data['log_prod_prob'].extend(probs)
 
             result = pd.concat([result, pd.DataFrame(res_data)])
             result_non = pd.concat([result_non, pd.DataFrame(res_non_data)])
@@ -164,10 +164,10 @@ def gpt2_eval_one_epoch(dataloader, gpt2, model, data_func):
         # step_time = time.time()
         # print(raw)
         # print(raw)
-        for i in range(len(raw)):
-            raw[i] = [raw[i][0], raw[i][1],
-                      encode(_tok, "a " + _tok.decode(raw[i][0]) + " is a " + _tok.decode(raw[i][1])),
-                      raw[i][2]]
+        # for i in range(len(raw)):
+        #     raw[i] = [raw[i][0], raw[i][1],
+        #               encode(_tok, "a " + _tok.decode(raw[i][0]) + " is a " + _tok.decode(raw[i][1])),
+        #               raw[i][2]]
         # print(raw)
         # raw[i][-1] = raw[i][2]
         # raw[i][2] = raw[i][0] + " is a " + raw[i][1]
