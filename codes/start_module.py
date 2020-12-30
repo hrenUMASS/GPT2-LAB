@@ -6,7 +6,7 @@ import numpy as np
 import torch
 import transformers as tfm
 
-from libs import get_config, get_module_from_parallel, get_params
+from libs import get_config, get_module_from_parallel, get_params, parse_epoch_save
 from libs import initial_loggers, log_info, cuda_mem_in_mb
 from libs import loggers
 from train_eval import train, evaluate, gpt2_eval
@@ -97,10 +97,14 @@ def start_func(config):
 
     dataset_parameters = {k.name: con[k] for k in dataset_type.value.fields}
 
-    model.to(main_device)
+    model = model.to(main_device)
+    print(model.device, main_device)
+
     data_indexer = indexer_type(**dataset_parameters)
     con[ce.data_indexer] = data_indexer
     save_type = con[ce.save_type]
+    # print(con[ce.save_epoch], parse_epoch_save(con[ce.save_epoch]))
+    con[ce.save_epoch] = parse_epoch_save(con[ce.save_epoch])
     if ce.eval_len in con:
         con[ce.prev_eval_loss] = np.inf
         # con[ce.eval_len] = max(con[ce.eval_len], 1)
@@ -159,6 +163,7 @@ def single_train(config, index):
     # model_state = config[ce.model].state_dict()
     # print(list(model_state.keys()))
     train_params = get_params(config, train)
+    train_params['config'] = config
     new_model, train_losses = train(**train_params)
     new_model = get_module_from_parallel(new_model)
     if config[ce.evalset] is not None:
@@ -175,7 +180,8 @@ def single_train(config, index):
     #     loss = config[ce.prev_eval_loss]
     # else:
     #     config[ce.prev_eval_loss] = loss
-    if save_path is not None:
+    print(index + 1, config[ce.save_epoch], save_model)
+    if save_path is not None and (config[ce.save_epoch] is None or index + 1 in config[ce.save_epoch]):
         if save_model:
             new_model = get_module_from_parallel(new_model)
             tokenizer = get_module_from_parallel(config[ce.tokenizer])

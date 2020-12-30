@@ -20,7 +20,8 @@ class GPT2REClsModel(GPT2PreTrainedModel):
         from global_constants import ignore_index
         # print(2, self.cls_head)
         transformer_outputs = self.transformer(input_ids=input_ids, attention_mask=attention_mask,
-                                               position_ids=position_ids, token_type_ids=token_type_ids, past=past)
+                                               position_ids=position_ids, token_type_ids=token_type_ids,
+                                               past_key_values=past)
         hidden_states = transformer_outputs[0]
         # print(hidden_states.shape)
         hid = hidden_states.mean(axis=1)

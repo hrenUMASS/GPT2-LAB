@@ -81,6 +81,8 @@ class ConfigEnums(Enum):
     config = 'config'
     method = 'method'
     cal = 'cal'
+    save_epoch = 'save_epoch'
+    save_checkpoint = 'save_checkpoint'
 
 
 _ce = ConfigEnums
@@ -116,21 +118,24 @@ class TrainModesEnums(Enum):
                            _ce.dataset_type, _ce.loaders, _ce.batch_len, _ce.eval_len, _ce.epochs, _ce.batch_size,
                            _ce.learning_rate, _ce.weight_decay, _ce.max_len,
                            _ce.from_checkpoint, _ce.continue_train, _ce.data,
-                           _ce.save_type, _ce.config, _ce.method, _ce.cal, _ce.random_init)
+                           _ce.save_type, _ce.config, _ce.method, _ce.cal, _ce.random_init, _ce.save_epoch,
+                           _ce.save_checkpoint)
     eval_sequences = ModeParam(single_sequence_generation,
                                _ce.mode, _ce.gpt2, _ce.model, _ce.load_path, _ce.save_path, _ce.idx_path, _ce.sent_path,
                                _ce.ent_path, _ce.idx_index_path, _ce.sent_index_path, _ce.ent_index_path, _ce.ent_data,
                                _ce.db_path, _ce.ids, _ce.indexer_type, _ce.batch_len_size, _ce.tokenizer,
                                _ce.dataset_type, _ce.loaders, _ce.batch_len, _ce.max_len, _ce.num_samples,
                                _ce.from_checkpoint, _ce.continue_train, _ce.data,
-                               _ce.save_type, _ce.config, _ce.method, _ce.cal, _ce.random_init)
+                               _ce.save_type, _ce.config, _ce.method, _ce.cal, _ce.random_init, _ce.save_epoch,
+                               _ce.save_checkpoint)
     gpt2_model_eval = ModeParam(gpt2_model_eval, _ce.mode, _ce.model, _ce.load_path, _ce.save_path, _ce.idx_path,
                                 _ce.sent_path, _ce.ent_path, _ce.idx_index_path, _ce.sent_index_path, _ce.db_path,
                                 _ce.ent_index_path, _ce.ent_data, _ce.gpt2, _ce.ids, _ce.indexer_type,
                                 _ce.batch_len_size,
                                 _ce.dataset_type, _ce.loaders, _ce.batch_len, _ce.max_len,
                                 _ce.from_checkpoint, _ce.continue_train, _ce.data,
-                                _ce.save_type, _ce.config, _ce.method, _ce.cal, _ce.random_init)
+                                _ce.save_type, _ce.config, _ce.method, _ce.cal, _ce.random_init, _ce.save_epoch,
+                                _ce.save_checkpoint)
 
 
 _me = ModelEnums
@@ -245,5 +250,7 @@ default_values = {
     _ce.random_init: False,
     _ce.config: {},
     _ce.method: 'method',
-    _ce.cal: 'cal'
+    _ce.cal: 'cal',
+    _ce.save_epoch: None,
+    _ce.save_checkpoint: False
 }

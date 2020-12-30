@@ -1,3 +1,5 @@
+from typing import Dict, Any, Tuple, Sequence
+
 import torch
 import transformers as tfm
 from torch import nn
@@ -7,14 +9,31 @@ from transformers.file_utils import (
     add_start_docstrings,
     add_code_sample_docstrings,
     add_start_docstrings_to_model_forward)
-from transformers.modeling_outputs import BaseModelOutputWithPastAndCrossAttentions
-from transformers.models.gpt2.modeling_gpt2 import Block, GPT2PreTrainedModel, GPT2Config
+from transformers.modeling_outputs import (
+    BaseModelOutputWithPastAndCrossAttentions,
+    CausalLMOutputWithPastAndCrossAttentions,
+    ModelOutput
+)
+from transformers.models.gpt2.modeling_gpt2 import Block, GPT2PreTrainedModel
 from transformers.utils.model_parallel_utils import get_device_map, assert_device_map
 
-from libs import get_between, pad_tensor, loggers, log_info
+from libs import get_between, pad_tensor, loggers, log_info, del_key
 from .doc_strings import *
 
 tok = tfm.GPT2Tokenizer.from_pretrained('gpt2')
+
+
+def get_device(*tensors):
+    for i, tensor in enumerate(tensors):
+        try:
+            if isinstance(tensor, Sequence):
+                tensor = tensor[0]
+                yield [x.device for x in tensor]
+            else:
+                yield 'None' if tensor is None else tensor.device
+        except:
+            print(i)
+            # exit()
 
 
 @add_start_docstrings(
@@ -28,7 +47,6 @@ class GPT2REModel(GPT2PreTrainedModel):
         # self.output_hidden_states = config.output_hidden_states
         # self.output_attentions = config.output_attentions
         # self.output_past = config.output_past
-        config: GPT2Config
         self.wte = nn.Embedding(config.vocab_size, config.n_embd)
         self.wpe = nn.Embedding(config.n_positions, config.n_embd)
         self.drop = nn.Dropout(config.embd_pdrop)
@@ -113,24 +131,31 @@ class GPT2REModel(GPT2PreTrainedModel):
                 return_dict=None,
                 encoder_hidden_states=None,
                 encoder_attention_mask=None):
+
         self.h: nn.ModuleList
-        from global_constants import DEBUG
+        from global_constants import DEBUG, main_device
         config = self.config
         output_hidden_states = output_hidden_states or config.output_hidden_states
         output_attentions = output_attentions or config.output_attentions
         use_cache = use_cache or config.use_cache
         return_dict = return_dict or config.return_dict
 
-        device = input_ids.device
+        device = main_device
 
         inputs_embeds = torch.zeros(*input_ids.shape, self.wte.embedding_dim, dtype=self.wte.weight.dtype,
                                     device=device)
         position_embeds = torch.zeros(*inputs_embeds.shape, dtype=self.wpe.weight.dtype, device=device)
-
+        position_ids = position_ids.to(self.device)
+        input_ids = input_ids.to(self.device)
+        token_type_ids = token_type_ids.to(self.device)
+        attention_mask = attention_mask.to(self.device)
+        if past is not None:
+            past = (x.to(self.device) for x in past)
         for i in range(input_ids.shape[0]):
             inp = input_ids[i]
             pos = position_ids[i]
             type_id = token_type_ids[i]
+            # print(type_id, inp)
             e1, e2 = inp[type_id == 1], inp[type_id == 2]
             ep1, ep2 = pos[type_id == 1], pos[type_id == 2]
             e1e, e2e = self.wte(e1), self.wte(e2)
@@ -142,7 +167,6 @@ class GPT2REModel(GPT2PreTrainedModel):
                 sp = pos[type_id == 0]
                 sl = s.shape[0]
                 if self.between:
-                    # print({'e1': e1, 'e2': e2, 's': s})
                     a, b = get_between(e1, e2, s, inclusive=True)
                     se = self.wte(s)[a:b]
                     attention_mask[i][len(e1) + len(e2) + (b - a):] = 0
@@ -153,9 +177,6 @@ class GPT2REModel(GPT2PreTrainedModel):
                 pos_embd = torch.cat((pos_embd, self.wpe(sp)))
             inputs_embeds[i] = embd
             position_embeds[i] = pos_embd
-
-        token_type_ids[token_type_ids == 2] = 1
-        token_type_embeds = self.wte(token_type_ids)
 
         if DEBUG:
             rstr = ''
@@ -170,6 +191,9 @@ class GPT2REModel(GPT2PreTrainedModel):
                 rstr += 'sent: {}'.format(tok.decode(inps))
             log_info(loggers.sample_logger, rstr)
 
+        token_type_ids[token_type_ids == 2] = 1
+        token_type_embeds = self.wte(token_type_ids)
+
         if self.config.add_cross_attention and encoder_hidden_states is not None:
             encoder_batch_size, encoder_sequence_length, _ = encoder_hidden_states.size()
             encoder_hidden_shape = (encoder_batch_size, encoder_sequence_length)
@@ -179,19 +203,12 @@ class GPT2REModel(GPT2PreTrainedModel):
         else:
             encoder_attention_mask = None
 
-        # print(inputs_embeds.shape, position_embeds.shape, token_type_embeds.shape, attention_mask.shape)
         if attention_mask is not None:
-            # attention_mask = attention_mask.view(-1, input_ids.shape[-1])
-            # attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
-            # attention_mask = attention_mask.to(dtype=next(self.parameters()).dtype)  # fp16 compatibility
-            # attention_mask = (attention_mask - 1.0) * 10000.0
-
-            attention_mask = attention_mask.view(input_ids.shape[-1], -1)
+            attention_mask = attention_mask.view(input_ids.shape[0], -1)
             attention_mask = attention_mask[:, None, None, :]
             attention_mask = attention_mask.to(dtype=self.dtype)
             attention_mask: torch.Tensor = (attention_mask - 1.0) * 10000.0
-
-        # print(e1_mask.shape, e2_mask.shape, attention_mask.shape)
+        # print(inputs_embeds.shape, position_embeds.shape, token_type_embeds.shape)
         hidden_states = inputs_embeds + position_embeds + token_type_embeds
         hidden_states = self.drop(hidden_states)
         head_mask = self.get_head_mask(None, self.config.n_layer)
@@ -239,16 +256,10 @@ class GPT2REModel(GPT2PreTrainedModel):
                     encoder_attention_mask,
                 )
             else:
-                print({
-                    'block': type(block),
-                    'hidden': hidden_states,
-                    'layer_p': layer_past,
-                    'head': head_mask,
-                    'enchi': encoder_hidden_states,
-                    'encam': encoder_attention_mask,
-                    'use_cache': use_cache,
-                    'out_att': output_attentions
-                })
+                # print('{}, {}, {}, {}, {}, {}'.format(hidden_states.shape, attention_mask.shape, head_mask[i],
+                #                                       encoder_hidden_states,
+                #                                       encoder_attention_mask,
+                #                                       layer_past.shape if layer_past is not None else None))
                 outputs = block(
                     hidden_states,
                     layer_past=layer_past,
@@ -264,6 +275,7 @@ class GPT2REModel(GPT2PreTrainedModel):
 
             if use_cache:
                 presents = presents + (present,)
+            # print(present.shape)
 
             if output_attentions:
                 all_self_attentions = all_self_attentions + (outputs[2],)
@@ -285,6 +297,10 @@ class GPT2REModel(GPT2PreTrainedModel):
         if not return_dict:
             return (v for v in [hidden_states, presents, all_hidden_states, all_self_attentions] if v is not None)
 
+        # temp = list(get_device(hidden_states, presents, all_hidden_states, all_self_attentions, all_cross_attentions))
+        # temp = [input_ids.size(1)] + temp
+        # print(len(temp))
+        # print('last: {}, {}, {}, {}, {}, {}'.format(*temp))
         return BaseModelOutputWithPastAndCrossAttentions(
             last_hidden_state=hidden_states,
             past_key_values=presents,
@@ -312,8 +328,6 @@ class GPT2LMREModel(GPT2PreTrainedModel):
 
     @add_start_docstrings(PARALLELIZE_DOCSTRING)
     def parallelize(self, device_map=None):
-        self.transformer: GPT2REModel
-        self.transformer.h: nn.ModuleList
         self.device_map = (
             get_device_map(len(self.transformer.h), range(torch.cuda.device_count()))
             if device_map is None
@@ -331,27 +345,167 @@ class GPT2LMREModel(GPT2PreTrainedModel):
         self.model_parallel = False
         torch.cuda.empty_cache()
 
-    def forward(self, input_ids, attention_mask=None, position_ids=None, token_type_ids=None, labels=None, past=None):
+    def forward(self, input_ids, attention_mask=None, position_ids=None, token_type_ids=None, labels=None, past=None,
+                return_dict=None):
         from global_constants import ignore_index
-        transformer_outputs = self.transformer(input_ids=input_ids, attention_mask=attention_mask,
-                                               position_ids=position_ids, token_type_ids=token_type_ids,
-                                               past=past)
+
+        transformer_outputs: BaseModelOutputWithPastAndCrossAttentions = \
+            self.transformer(input_ids=input_ids,
+                             attention_mask=attention_mask,
+                             position_ids=position_ids,
+                             token_type_ids=token_type_ids,
+                             past=past,
+                             return_dict=return_dict)
         hidden_states = transformer_outputs[0]
+
+        if self.model_parallel:
+            torch.cuda.set_device(self.transformer.first_device)
+            hidden_states = hidden_states.to(self.lm_head.weight.device)
 
         lm_logits = self.lm_head(hidden_states)
 
-        outputs = transformer_outputs[1:]
-        outputs = (lm_logits,) + outputs
+        loss = None
+
         if labels is not None:
             # Shift so that tokens < n predict n
-            # print(e1_labels.shape, e2_labels.shape, labels.shape)
-            # print(lm_logits.shape)
-            # print(lm_logits[..., :-1, :].shape)
             shift_logits = lm_logits[..., :-1, :].contiguous()
             shift_labels = labels[..., 1:].contiguous()
             # Flatten the tokens
             loss_fct = CrossEntropyLoss(ignore_index=ignore_index)
             loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
-            outputs = (loss,) + outputs
 
-        return outputs  # (loss), lm_logits, presents, (all hidden_states), (attentions)
+        if not return_dict:
+            outputs = (lm_logits,) + transformer_outputs[1:]
+            return ((loss,) + outputs) if loss is not None else outputs
+            # (loss), lm_logits, presents, (all hidden_states), (attentions)
+
+        # if past is not None:
+        #     lm_logits = lm_logits.cpu()
+
+        return CausalLMOutputWithPastAndCrossAttentions(
+            loss=loss,
+            logits=lm_logits.cpu(),
+            attentions=transformer_outputs.attentions,
+            cross_attentions=transformer_outputs.cross_attentions,
+            past_key_values=transformer_outputs.past_key_values
+        )
+
+    @classmethod
+    def _update_model_kwargs_for_generation(cls,
+                                            outputs: ModelOutput,
+                                            model_kwargs: Dict[str, Any],
+                                            is_encoder_decoder: bool = False
+                                            ) -> Dict[str, Any]:
+        model_kwargs['past'] = getattr(
+            outputs, 'past_key_values',
+            getattr(
+                outputs, 'mems',
+                getattr(
+                    outputs, 'past_buckets_states', None
+                )
+            )
+        )
+
+        use_cache = model_kwargs['use_cache']
+
+        if 'position_ids' in model_kwargs:
+            position_ids: torch.Tensor = model_kwargs['position_ids']
+            plus = 0 if 'first' in model_kwargs else position_ids[:, None, -1] + 1
+            new_pos = torch.zeros(position_ids.size(0), 1, dtype=position_ids.dtype) + plus
+            if use_cache:
+                model_kwargs['position_ids'] = new_pos
+            else:
+                model_kwargs['position_ids'] = torch.cat([position_ids, new_pos], dim=-1)
+
+        # update token_type_ids with last value
+        if "token_type_ids" in model_kwargs:
+            token_type_ids: torch.Tensor = model_kwargs["token_type_ids"]
+            new_token = torch.zeros(token_type_ids.size(0), 1, dtype=token_type_ids.dtype)
+            if use_cache:
+                model_kwargs['token_type_ids'] = new_token
+            else:
+                model_kwargs["token_type_ids"] = torch.cat([token_type_ids, new_token], dim=-1)
+
+        # if 'input_ids' in model_kwargs:
+        #     input_ids: torch.Tensor = model_kwargs['input_ids']
+        #     if use_cache:
+        #         model_kwargs['input_ids'] = input_ids[:, None, -1]
+
+        # update attention mask
+        if not is_encoder_decoder:
+            if "attention_mask" in model_kwargs:
+                attention_mask = model_kwargs["attention_mask"]
+                new_att = attention_mask.new_ones((attention_mask.shape[0], 1))
+                if use_cache:
+                    model_kwargs["attention_mask"] = new_att
+                else:
+                    model_kwargs["attention_mask"] = torch.cat(
+                        [attention_mask, new_att], dim=-1
+                    )
+        del_key(model_kwargs, 'first')
+        # print('po:{}, to:{}, at:{}'.format(
+        #     model_kwargs['position_ids'].shape,
+        #     model_kwargs['token_type_ids'].shape,
+        #     model_kwargs['attention_mask'].shape
+        # ))
+        # print(list(model_kwargs.keys()))
+        # print('np:{}, nt:{}, na:{}'.format(
+        #     new_pos.shape,
+        #     new_token.shape,
+        #     new_att.shape
+        # ))
+        return model_kwargs
+
+    @staticmethod
+    def _expand_inputs_for_generation(
+            input_ids: torch.LongTensor,
+            expand_size: int = 1,
+            is_encoder_decoder: bool = False,
+            attention_mask: torch.LongTensor = None,
+            encoder_outputs=None,
+            **model_kwargs
+    ) -> Tuple[torch.LongTensor, Dict[str, Any]]:
+        expanded_return_idx = (
+            torch.arange(input_ids.shape[0]).view(-1, 1).repeat(1, expand_size).view(-1).to(input_ids.device)
+        )
+        input_ids: torch.LongTensor = input_ids.index_select(0, expanded_return_idx)
+
+        # print('expanding...')
+        if "token_type_ids" in model_kwargs:
+            token_type_ids = model_kwargs["token_type_ids"]
+            model_kwargs["token_type_ids"] = token_type_ids.index_select(0, expanded_return_idx)
+
+        if "position_ids" in model_kwargs:
+            position_ids = model_kwargs["position_ids"]
+            model_kwargs["position_ids"] = position_ids.index_select(0, expanded_return_idx)
+
+        if attention_mask is not None:
+            model_kwargs["attention_mask"] = attention_mask.index_select(0, expanded_return_idx)
+
+        if is_encoder_decoder:
+            assert encoder_outputs is not None
+            encoder_outputs["last_hidden_state"] = encoder_outputs.last_hidden_state.index_select(
+                0, expanded_return_idx
+            )
+            model_kwargs["encoder_outputs"] = encoder_outputs
+        # print('model{}'.format(model_kwargs))
+        return input_ids, model_kwargs
+
+    def prepare_inputs_for_generation(self, input_ids: torch.LongTensor, **kwargs) -> Dict[str, Any]:
+        device = self.device
+
+        def to_device(dc, par):
+            res = dc.get(par)
+            return res if res is None else res
+
+        use_cache = kwargs['use_cache'] and 'first' not in kwargs
+        if use_cache:
+            input_ids = input_ids[:, None, -1]
+
+        return {'input_ids': input_ids.to(device),
+                'token_type_ids': kwargs['token_type_ids'],
+                'position_ids': kwargs['position_ids'],
+                'attention_mask': kwargs['attention_mask'],
+                'past': to_device(kwargs, 'past'),
+                'labels': to_device(kwargs, 'labels')
+                }

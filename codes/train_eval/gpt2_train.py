@@ -18,9 +18,6 @@ def train_one_epoch(dataloader, model, optimizer, scheduler, data_process_func, 
     loss = None
     for step, raw in enumerate(dataloader):
         step_time = time.time()
-        # print(raw)
-        # print(inspect.getsource(data_process_func))
-        # print(raw)
         data = data_process_func(raw)
         # for r in raw:
         #     print(tok.decode(r[0].tolist()), tok.decode(r[1].tolist()))
@@ -47,7 +44,9 @@ def train_one_epoch(dataloader, model, optimizer, scheduler, data_process_func, 
 
 
 def train(model, dataset, batch_size, epochs, epoch_iter, learning_rate=1e-2, weight_decay=1e-4,
-          save_path=None, from_checkpoint=False, continue_train=False, tokenizer=None, data_func=lambda x: x):
+          save_path=None, from_checkpoint=False, continue_train=False, tokenizer=None, data_func=lambda x: x,
+          config=None):
+    from global_constants import ConfigEnums as ce
     loss_logger, train_logger = loggers.loss_logger, loggers.train_logger
     no_decay = ['bias', 'LayerNorm.weight']
     # device_ids = list(range(n_gpus))
@@ -82,7 +81,7 @@ def train(model, dataset, batch_size, epochs, epoch_iter, learning_rate=1e-2, we
         loss_value, loss = train_one_epoch(data_loader, model, optimizer, scheduler, data_process_func=data_func,
                                            tok=tokenizer)
         losses.extend(loss_value)
-        if save_path is not None:
+        if save_path is not None and config[ce.save_checkpoint]:
             get_module_from_parallel(model).save_pretrained(save_path)
             if tokenizer is not None:
                 tokenizer.save_pretrained(save_path)

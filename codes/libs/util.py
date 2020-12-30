@@ -47,14 +47,6 @@ def safe_sql(cursor, command, arguments=None, fetch='all', size=1):
 
             if fetch == 'all':
                 res = c.fetchall()
-                # print(cursor.execute('explain ' + command, arguments).fetchall())
-                # if 'idx' not in command:
-                #     print(command, arguments)
-                #     command2 = command[:command.index('WHERE id ')] + 'WHERE id=?'
-                #     print(command2)
-                #     print(cursor.execute(command, arguments).fetchall(),
-                #           repr(cursor.execute(command2, arguments[0]).fetchall()))
-                # print('res', res)
             elif fetch == 'one':
                 res = c.fetchone()
             else:
@@ -115,13 +107,10 @@ def get_tensor_batch(batch, batch_size=32, max_len=512):
         attn_mask = torch.zeros(*batch.shape, dtype=torch.long, device=device)
         return {'input_ids': batch, 'labels': labels, 'attention_mask': attn_mask}
 
-    # print(batch)
-    # print('batch1:{}'.format(batch), [x.shape for x in batch])
     max_len = min(max(batch, key=lambda x: x.shape[-1]).shape[-1], max_len)
     attn_mask = torch.ones(batch_size, max_len, dtype=torch.float16, device=device)
     labels = torch.zeros(batch_size, max_len, dtype=torch.long, device=device)
     batch = [x[0] if len(x.shape) > 1 else x for x in batch]
-    # print('batch2:{}'.format(batch), [x.shape for x in batch])
     for i in range(batch_size):
         if i >= len(batch):
             batch.append(eos_id + torch.zeros(1, dtype=torch.long, device=device))
@@ -188,6 +177,24 @@ def get_between(e1, e2, sent, inclusive=False):
         return e1i + len(e1), e2i
 
 
+def parse_epoch_save(epoch_save):
+    if epoch_save is None:
+        return None
+    result = []
+    for e in epoch_save:
+        if isinstance(e, Sequence):
+            e[1] += 1
+            if len(e) in (2, 3):
+                result.extend(list(range(*e)))
+            else:
+                log_info(loggers.prepare_logger, 'Cannot parse epoch save range {}'.format(e))
+        elif isinstance(e, int):
+            result.append(e)
+        else:
+            log_info(loggers.prepare_logger, 'Cannot parse epoch save range {}'.format(e))
+    return result
+
+
 def process_re_data(data, between=False, inclusive=True):
     from global_constants import eos_id, ignore_index
     e1_ids, e2_ids = data.get('e1', None), data.get('e2', None)
@@ -211,14 +218,16 @@ def process_re_data(data, between=False, inclusive=True):
     has_ents = e1_ids is not None and e2_ids is not None and len(e1_ids) == len(e2_ids) and len(e1_ids) > 0 and len(
         e2_ids) > 0
     has_sents = input_ids is not None and len(input_ids) > 0
-    for i in range(length):
+
+    def process_single_tensor(input_id, e1_id, e2_id):
         ids = torch.zeros(0, dtype=torch.long, device=device)
         token = torch.zeros(0, dtype=torch.long, device=device)
         pos = torch.zeros(0, dtype=torch.long, device=device)
         attn = torch.zeros(0, dtype=torch.float, device=device)
         lab = torch.zeros(0, dtype=torch.long, device=device)
+
         if has_ents:
-            e1, e2 = e1_ids[i], e2_ids[i]
+            e1, e2 = e1_id, e2_id
             e1l, e2l = e1.shape[0], e2.shape[0]
             e1p, e2p = pos_id(e1l), pos_id(e2l)
             e1a, e2a = type_ids(e1l, index=1, dtype=torch.float), type_ids(e2l, index=1, dtype=torch.float)
@@ -227,8 +236,9 @@ def process_re_data(data, between=False, inclusive=True):
             pos = torch.cat((e1p, e2p))
             attn = torch.cat((e1a, e2a))
             lab = torch.cat((e1, e2))
+
         if has_sents:
-            in_ids = input_ids[i]
+            in_ids = input_id
             if between and has_ents:
                 a, b = get_between(e1, e2, in_ids, inclusive=inclusive)
                 ids = in_ids[a:b]
@@ -238,7 +248,10 @@ def process_re_data(data, between=False, inclusive=True):
                 pos = pos_id(inl)
                 lab = ids
             else:
-                inl = in_ids.shape[0]
+                if len(in_ids.shape) == 0:
+                    inl = 1
+                else:
+                    inl = in_ids.shape[0]
                 inp = pos_id(inl)
                 ina = type_ids(inl, index=1, dtype=torch.float)
                 ids = torch.cat((ids, in_ids))
@@ -251,6 +264,14 @@ def process_re_data(data, between=False, inclusive=True):
         attns.append(attn)
         poses.append(pos)
         labels.append(lab)
+
+    # if input_ids is None or length in (1, 0):
+    #     process_single_tensor(input_ids, e1_ids, e2_ids)
+    # else:
+    for i in range(length):
+        # print(input_ids)
+        process_single_tensor(input_ids[i] if input_ids else None, e1_ids[i], e2_ids[i])
+
     result_ids = cat_tensors(result_ids, padding=eos_id)
     poses = cat_tensors(poses)
     tokens = cat_tensors(tokens, padding=0)
@@ -266,14 +287,9 @@ def get_re_data(data, max_len=np.inf, batch_size=32):
     empty = torch.zeros(0, dtype=torch.long)
     e1_data, e2_data = [], []
     sent_data = []
-    # print('idx', [x[-1] for x in data])
     for x in data:
         if len(data[0]) > 3:
             sent = x[2]
-            # failed = False
-            # if not (in_tensor(sent, x[0]) and in_tensor(sent, x[1])):
-            #     print('Entity not in sentence\ne1={}\ne2={}\nsent={}\nidx={}'.format(x[0], x[1], sent, x[-1]))
-            #     failed = True
             failed = (x[0].shape[0] < 1 or x[1].shape[0] < 1)
             if failed:
                 sent_data.append(empty)
@@ -283,7 +299,6 @@ def get_re_data(data, max_len=np.inf, batch_size=32):
             adj_max_len = max_len - x[0].shape[0] - x[1].shape[0]
             if sent.shape[0] > adj_max_len:
                 ei = max(get_index(sent, x[0]) + x[0].shape[0], get_index(sent, x[1]) + x[1].shape[0])
-                # print('ei index {}'.format(ei))
                 if ei > adj_max_len:
                     sent_data.append(empty)
                     e1_data.append(empty)
@@ -318,7 +333,6 @@ def process_cls_data(data):
     tokens = []
     poses = []
     labels = []
-    # print(data)
     for i in range(len(data)):
         s = result_ids[i]
         l = len(s)
@@ -339,15 +353,10 @@ def process_cls_data(data):
 
 def get_model_output(model: PreTrainedModel, data):
     from global_constants import main_device
-    # device = torch.device('cuda:0')
-    # for k, v in data.items():
-    #     print(k, v)
     for i in data:
         if data[i] is not None and isinstance(data[i], torch.Tensor):
             req_grad = data[i].requires_grad
             data[i] = data[i].clone().detach().requires_grad_(req_grad).to(main_device)
-    # print([x.device for x in data.values()])
-    # print(data)
     try:
         output = model(**data)
         return output
